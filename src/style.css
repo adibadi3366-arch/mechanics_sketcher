@@ -466,6 +466,13 @@ dialog .lead { margin: 0 0 12px; }
 dialog .steps { margin: 0 0 14px; }
 dialog.welcome { width: min(540px, calc(100vw - 32px)); padding: 22px 24px 18px; max-height: calc(100vh - 32px); overflow-y: auto; }
 dialog.welcome h2 { font-size: 21px; margin-bottom: 6px; }
+/* The notice about a release: what is new, a line each. */
+ul.news { margin: 0 0 12px; padding-left: 18px; }
+ul.news li { margin-bottom: 6px; }
+ul.news code { font-size: 12.5px; padding: 0 3px; border-radius: 3px; background: var(--board); }
+#news-body p { margin: 0 0 10px; }
+.text-link { color: var(--blue); font-weight: 500; text-decoration: none; }
+.text-link:hover { text-decoration: underline; }
 
 /* Asking for support: a button that reads as one, wherever it is shown. */
 .support-link {

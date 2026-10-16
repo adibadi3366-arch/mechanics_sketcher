@@ -18,7 +18,14 @@ export const SUPPORT_URL = "https://ko-fi.com/mech_sketch";
  * before the file can be saved or the TikZ copied. 0 exports at once. There
  * is no wait while SUPPORT_URL is empty, nor in the beta.
  */
-export const EXPORT_WAIT_SECONDS = BETA ? 0 : 10;
+export const EXPORT_WAIT_SECONDS = BETA ? 0 : 3;
+
+/**
+ * Which release the one-time notice is about. Someone who has used the app
+ * before is told once what this release brings; changing it shows the notice
+ * again, for the next release.
+ */
+export const NEWS_ID = "2026-10";
 
 /**
  * Where bug reports and suggestions are sent. The report form writes an

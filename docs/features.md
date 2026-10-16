@@ -5,7 +5,7 @@ Mech Sketch is a free sketcher for mechanics figures that runs in the browser. Y
 - Live app: https://mech-sketch.org
 - Beta, with what is coming next: https://mech-sketch.org/beta/
 
-Features marked **(beta)** are only in the beta so far. They reach the live app once the beta is merged.
+Everything below is in the live app. New features are tried out first in the beta, which keeps its own sketch apart from the live app's.
 
 ---
 
@@ -16,7 +16,7 @@ Features marked **(beta)** are only in the beta so far. They reach the live app 
 - **The figure looks like it belongs in your document.** TikZ export means LaTeX sets the labels in your document's own font. You type labels as TeX (`F_1`, `\alpha`, `2a`), so what you type is what LaTeX prints.
 - **Text and arrowheads have a fixed print size.** Set the figure width, for example 8 cm, and text stays 10 pt, however long the beam is in metres. What doesn't overlap on screen won't overlap in the PDF.
 - **One source, two exports.** SVG and TikZ come from the same drawing, so a picture in a slide and a figure in a thesis match.
-- **Plots keep their formulas (beta).** A plot exports to pgfplots with the formulas still written as formulas, not thousands of points, so it stays editable in LaTeX.
+- **Plots keep their formulas.** A plot exports to pgfplots with the formulas still written as formulas, not thousands of points, so it stays editable in LaTeX.
 - **Covers the whole mechanics track.** It handles statics (supports, loads), strength of materials (beams, distributed loads, internal force diagrams), and dynamics and vibrations (springs, dampers, centres of mass, parametric paths).
 - **Free, with no account and no install needed.** It opens in the browser. You can also install it as an app with its own window, and it then works offline.
 - **Your work stays with you.** Sketches are autosaved in your browser. Save writes a file you can keep or take to another computer.
@@ -38,7 +38,7 @@ Features marked **(beta)** are only in the beta so far. They reach the live app 
 ### Drawing
 | Tool | Key | What it does |
 |---|---|---|
-| Construction | G | A switch at the start of the ribbon. While it's on, what you draw is construction geometry: pink while it can still move and dark purple once it's fully constrained. It's left out of the print and the export, but takes constraints and dimensions like anything else. **(beta)** |
+| Construction | G | A switch at the start of the ribbon. While it's on, what you draw is construction geometry: pink while it can still move and dark purple once it's fully constrained. It's left out of the print and the export, but takes constraints and dimensions like anything else. |
 | Line | L | Click start and end; the next click continues from there. Nearly level or upright lines snap, and Alt switches that off. |
 | Centre line | | A thin dash-dotted line that's part of the figure. It's good for mirroring about. |
 | Circle | C | Centre, then radius. |
@@ -78,11 +78,11 @@ Conflicting constraints are flagged as they happen. The solver is FreeCAD's plan
   - Forces: the arrow length follows the magnitude, at one scale for all forces.
   - Moments: the arc size follows the magnitude, clockwise or anticlockwise.
   - Distributed loads: uniform, triangular or trapezoidal, over all of a line or part of it, with optional shading.
-- **Diagram (beta):** lays a plot from the Plot tab along a line, an arc or a beam, the way internal force diagrams are drawn.
+- **Diagram:** lays a plot from the Plot tab along a line, an arc or a beam, the way internal force diagrams are drawn.
   - Drag the peak to set the height, and drag the ends to cover part of the member.
   - The peak value is written on it.
   - It updates when the function changes.
-- **Plots at a point (beta):** a plot's parametric curves can be placed at a point, with that point as the origin, for example a path or a trajectory on a mechanism.
+- **Plots at a point:** a plot's parametric curves can be placed at a point, with that point as the origin, for example a path or a trajectory on a mechanism.
 - **Axes:** a coordinate frame, pinned to a joint if wanted. Drag the tips to change length and click a label to rename it.
 - **Arrow and curved arrow:** for velocities, rotations and anything else with a name. They're constrained and dimensioned like lines.
 - **Datum point:** a coloured dot with a name.
@@ -99,7 +99,7 @@ Any text on the drawing (a dimension, an arrow's name, a note, a balloon) can be
 
 ---
 
-## Dynamics tab (beta)
+## Dynamics tab
 
 - **Spring:**
   - Drawn as a zigzag or a coil.
@@ -113,7 +113,7 @@ All of these stretch and turn with their end points and take constraints and dim
 
 ---
 
-## Plot tab (beta)
+## Plot tab
 
 A workspace of its own for plotting functions, exported separately as SVG or pgfplots.
 
@@ -149,7 +149,7 @@ A workspace of its own for plotting functions, exported separately as SVG or pgf
 - **Figure width:** the width of the exported figure, in cm.
 - **Print preview (Q):** hides everything that isn't exported and shows text at its size in print.
 - **Accented letters** (á, é, ő, ű, …) work in labels and notes, including in the TikZ export.
-- **TeX fields show typeset (beta):** a field holding `\pi` or `F_1` shows π or F₁ while you're not typing in it.
+- **TeX fields show typeset:** a field holding `\pi` or `F_1` shows π or F₁ while you're not typing in it.
 
 ---
 
@@ -160,9 +160,9 @@ A workspace of its own for plotting functions, exported separately as SVG or pgf
 | **SVG** | A picture file for slides, Word or the web. |
 | **TikZ** | A `.tex` file to `\input` in LaTeX. Labels are set in the document's font. |
 | **Copy TikZ** | The same text, on the clipboard. |
-| **Plot → pgfplots (beta)** | An `axis` environment with the formulas written as formulas, ticks and labels pinned to match the screen. |
+| **Plot → pgfplots** | An `axis` environment with the formulas written as formulas, ticks and labels pinned to match the screen. |
 
-The live app shows the Support button for 10 seconds before an export finishes; the beta exports at once.
+The live app shows the Support button for 3 seconds before an export finishes; the beta exports at once.
 
 ---
 
@@ -192,7 +192,7 @@ The live app shows the Support button for 10 seconds before an export finishes; 
 | Ctrl+S / Ctrl+O | Save / open |
 | Q | Print preview |
 | R | Turn the selected symbol |
-| G | Construction on or off **(beta)** |
+| G | Construction on or off |
 | L C A P | Line, circle, arc, point |
 | X N B | Trim, note, balloon |
 | D H V E O M T F | Dimension, horizontal, vertical, equal, coincident, midpoint, tangent, fix |
@@ -208,11 +208,10 @@ The live app shows the Support button for 10 seconds before an export finishes; 
 
 ## Notes for updating the PDF guide
 
-The old one-page guide predates the beta. When updating it:
+The old one-page guide predates these features. When updating it:
 
 - **Remove** "Not built yet: distributed loads". They're built.
 - **Add** the Dynamics tab and the Plot tab, with one screenshot each (a spring–mass–damper and an internal force diagram would show them best).
 - **Add** the Diagram tool to the Annotate list, and the Construction switch to the Sketch list.
 - **Mouse and keys:** add G (construction), Q (print preview) and R (turn).
-- **Export step:** keep the note about the 10-second support wait for the live app.
-- **Wait for the merge:** update the PDF once the beta is merged into the live app, so the guide and the app match.
+- **Export step:** the support wait is now 3 seconds, not 10.

@@ -32,9 +32,10 @@ import { type CopyResult, PATTERN_MAX, mirrorCopy, linearCopy, circularCopy, nex
 import { toSvg, toTikz } from "./export";
 import { icon } from "./icons";
 import { showTexFields } from "./texfield";
-import { BETA, EXPORT_WAIT_SECONDS, REPORT_EMAIL, SUPPORT_URL } from "./config";
+import { BETA, EXPORT_WAIT_SECONDS, NEWS_ID, REPORT_EMAIL, SUPPORT_URL } from "./config";
+import { news } from "./news";
 import { type ReportKind, composeReport } from "./report";
-import { TipBook, welcomeDue, setWelcomeDue, firstInSession } from "./guide";
+import { TipBook, welcomeDue, setWelcomeDue, firstInSession, newsDue, setNewsSeen } from "./guide";
 import { type BeamEnds, straightBeam, curvedBeam } from "./beam";
 import { PlotWorkspace } from "./plotwork";
 import { baseline, beamAxis, diagramShape, plotPeak, traceShape, traceReach } from "./diagram";
@@ -295,6 +296,11 @@ const $ = <T extends HTMLElement | SVGElement = HTMLElement>(sel: string): T => 
 };
 const esc = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 
+/** Whether something is kept in the browser's storage under this key. */
+function hasStored(key: string): boolean {
+  try { return localStorage.getItem(key) !== null; } catch { return false; }
+}
+
 /** Parses a number typed with either a decimal point or a decimal comma. */
 function parseNumber(text: string): number {
   const t = text.trim().replace(",", ".");
@@ -310,6 +316,12 @@ function buildLabel(): string {
 }
 
 export class App {
+  /**
+   * Whether this browser has used this copy of the app before: in the beta, that
+   * it has a sketch of its own; in the released app, that it has one at all. Only
+   * then is there anything new to tell.
+   */
+  private readonly returning = hasStored(AUTOSAVE_KEY);
   sk: Sketch = emptySketch();
   private history = new History();
   private result: SolveResult = { ok: true, dof: 0, conflicting: [], redundant: [] };
@@ -411,8 +423,28 @@ export class App {
     }
     for (const row of document.querySelectorAll<HTMLElement>("[data-support-row]")) row.hidden = !SUPPORT_URL;
     const first = firstInSession();
-    if (welcomeDue()) this.showWelcome();
+    if (welcomeDue()) {
+      // Someone new is shown round instead; what is new is new to them anyway.
+      setNewsSeen(NEWS_ID, BETA);
+      this.showWelcome();
+    } else if (this.returning && newsDue(NEWS_ID, BETA)) this.showNews();
     else if (SUPPORT_URL && first) this.showSupportCard();
+  }
+
+  /** Once for each release: what it brings, or in the beta, that what was tried out there is live. */
+  private showNews(): void {
+    const dialog = $<HTMLDialogElement>("#news-dialog");
+    if (dialog.open) return;
+    const n = news(BETA);
+    $("#news-title").textContent = n.title;
+    $("#news-body").innerHTML = n.body;
+    const link = $<HTMLAnchorElement>("#news-link");
+    link.href = n.link.href;
+    link.textContent = n.link.text;
+    $("#news-close").textContent = n.close;
+    setNewsSeen(NEWS_ID, BETA);
+    dialog.showModal();
+    $("#news-close").focus();
   }
 
   /** The greeting and the short guide. Also what the Help button opens. */

@@ -76,6 +76,14 @@ const write = (store: () => Storage, key: string, value: string): void => {
 export const welcomeDue = (): boolean => read(() => localStorage, WELCOME_KEY) !== "seen";
 export const setWelcomeDue = (due: boolean): void => write(() => localStorage, WELCOME_KEY, due ? "" : "seen");
 
+/**
+ * Whether the notice about a release is still to be shown. The released app
+ * and the beta share their storage, so each keeps its own record.
+ */
+const newsKey = (beta: boolean) => (beta ? "mech-sketch-beta.news" : "mech-sketch.news");
+export const newsDue = (id: string, beta: boolean): boolean => read(() => localStorage, newsKey(beta)) !== id;
+export const setNewsSeen = (id: string, beta: boolean): void => write(() => localStorage, newsKey(beta), id);
+
 /** True the first time it is asked in a browser session, so a reload does not ask for support again. */
 export function firstInSession(): boolean {
   if (read(() => sessionStorage, SESSION_KEY)) return false;
