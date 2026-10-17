@@ -6,8 +6,8 @@ export interface News {
   title: string;
   /** The body of the notice, as markup. */
   body: string;
-  /** The link beside the button that closes it: where it goes, and what it says. */
-  link: { href: string; text: string };
+  /** A link beside the button that closes it, if there is one: where it goes, and what it says. */
+  link?: { href: string; text: string };
   /** What the button that closes it says. */
   close: string;
 }
@@ -16,7 +16,7 @@ export interface News {
 const LIVE: News = {
   title: "New in Mech Sketch",
   body:
-    `<p class="lead">What was tried out in the beta is now part of Mech Sketch.</p>` +
+    `<p class="lead">Here is what is new since you last used it.</p>` +
     `<ul class="news">` +
     `<li><b>Dynamics tab.</b> Springs, drawn as a zigzag or a coil, dampers, a torsion spring and damper, and the centre of mass mark. They stretch and turn with what they are tied to.</li>` +
     `<li><b>Plot tab.</b> Functions, functions in pieces and curves given by x(t) and y(t), with the graph and the print side by side. A plot exports as SVG, or for pgfplots with its formulas kept as formulas.</li>` +
@@ -25,9 +25,7 @@ const LIVE: News = {
     `<li><b>Dimension</b> has moved to the Sketch tab, first among the constraints.</li>` +
     `<li><b>TeX shows typeset</b> in the side panel: <code>\\pi</code> as π, <code>F_1</code> with its subscript.</li>` +
     `<li><b>A shorter wait</b> before an export: 3 seconds instead of 10.</li>` +
-    `</ul>` +
-    `<p class="muted">New features are tried out first in the <b>beta</b>, at mech-sketch.org/beta/. It keeps its own sketch, apart from this one, so trying it never touches your work here.</p>`,
-  link: { href: "./beta/", text: "Try the beta" },
+    `</ul>`,
   close: "Got it",
 };
 

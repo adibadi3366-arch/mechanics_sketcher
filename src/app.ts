@@ -439,8 +439,9 @@ export class App {
     $("#news-title").textContent = n.title;
     $("#news-body").innerHTML = n.body;
     const link = $<HTMLAnchorElement>("#news-link");
-    link.href = n.link.href;
-    link.textContent = n.link.text;
+    link.hidden = !n.link;
+    link.href = n.link?.href ?? "";
+    link.textContent = n.link?.text ?? "";
     $("#news-close").textContent = n.close;
     setNewsSeen(NEWS_ID, BETA);
     dialog.showModal();

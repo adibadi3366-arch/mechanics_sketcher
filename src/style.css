@@ -473,6 +473,8 @@ ul.news code { font-size: 12.5px; padding: 0 3px; border-radius: 3px; background
 #news-body p { margin: 0 0 10px; }
 .text-link { color: var(--blue); font-weight: 500; text-decoration: none; }
 .text-link:hover { text-decoration: underline; }
+/* With no link beside it, the button still sits on the right. */
+#news-close { margin-left: auto; }
 
 /* Asking for support: a button that reads as one, wherever it is shown. */
 .support-link {
