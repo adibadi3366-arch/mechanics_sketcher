@@ -173,6 +173,7 @@ function copyOnce(sk: Sketch, src: Batch, move: Move, link: Link, tol: number, s
     if (e.centre) made.centre = true;
     if (e.dashed) made.dashed = true;
     if (e.weight !== undefined) made.weight = e.weight;
+    if (e.color) made.color = e.color;
     cmap.set(e.id, made.id);
     out.curves.push(made.id);
   }

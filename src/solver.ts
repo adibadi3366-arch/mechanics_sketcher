@@ -180,6 +180,8 @@ function linkPrims(sk: Sketch, c: Link, params: FreeParam[]): Prim[] {
  */
 function constraintPrims(sk: Sketch, c: Constraint, params: FreeParam[]): Prim[] {
   const id = c.id;
+  // A measure reads the geometry and holds nothing.
+  if ((c.type === "distance" || c.type === "angle" || c.type === "radius") && c.measure) return [];
   switch (c.type) {
     case "mirror":
     case "shift":

@@ -26,6 +26,8 @@ export interface Line {
   weight?: number;
   /** Drawn with dashes: an edge that is hidden, or a second position of a part. */
   dashed?: boolean;
+  /** CSS hex colour it is drawn in, an arrow's head and name with it. Unset: black. */
+  color?: string;
   /** An arrow annotation: which end carries the head. p1 is the start, p2 the end. */
   arrow?: ArrowEnds;
   /**
@@ -72,6 +74,8 @@ export interface Circle {
   weight?: number;
   /** Drawn with dashes. */
   dashed?: boolean;
+  /** CSS hex colour it is drawn in. Unset: black. */
+  color?: string;
 }
 /** Counter-clockwise from p1 to p2 around c. */
 export interface Arc {
@@ -88,6 +92,8 @@ export interface Arc {
   weight?: number;
   /** Drawn with dashes. */
   dashed?: boolean;
+  /** CSS hex colour it is drawn in, an arrow's head and name with it. Unset: black. */
+  color?: string;
   /** A curved arrow: which end carries the head. p1 is the start, p2 the end, counter-clockwise. */
   arrow?: ArrowEnds;
   /** Drawn as a spring or a damper bent round its centre, as one that resists turning is. */
@@ -155,6 +161,11 @@ interface DimBase {
   label?: string;
   /** Still drives the geometry, but is left out of the figure. */
   hidden?: boolean;
+  /**
+   * A measure: it drives nothing and shows what the geometry measures now,
+   * in the editor only. Its value is what was measured when it was made.
+   */
+  measure?: true;
 }
 export type DistanceMode = "aligned" | "horizontal" | "vertical";
 export interface DistanceDim extends DimBase {
@@ -439,13 +450,44 @@ export interface Trace {
   /** Drawn without the shading of the curves that are shaded in the plot. */
   plain?: boolean;
 }
+/**
+ * A scale bar, an etalon: a length of the drawing marked off with a name,
+ * such as 1 m, or 10 kN for the forces drawn at a scale.
+ */
+export interface Etalon {
+  id: Id;
+  type: "etalon";
+  /** Where the bar starts, in model units. */
+  x: number;
+  y: number;
+  /** Which way it runs, in radians. */
+  angle: number;
+  /** How long it is, in model units. */
+  length: number;
+  /** What it is worth, as TeX math, such as 1\,\mathrm{m}. Empty: its length in the drawing's units. */
+  label: string;
+  /** How many equal parts it is marked off into. Unset: 1, ticks at its ends only. */
+  parts?: number;
+}
+/** The mark of a right angle: a small square in the corner two lines make. */
+export interface RightAngle {
+  id: Id;
+  type: "rightangle";
+  l1: Id;
+  l2: Id;
+  /** Which way along each line the square lies from the corner: 1 towards its end p2, -1 towards p1. */
+  s1: 1 | -1;
+  s2: 1 | -1;
+  /** A dot inside the square. */
+  dot?: boolean;
+}
 export type AnyLoad = Load | LineLoad | Moment;
 /** Which scale a load is drawn at: forces, loads along a line and moments are different quantities. */
 export type LoadKind = "force" | "line" | "moment";
 export const loadKind = (s: AnyLoad): LoadKind => (s.type === "load" ? "force" : s.type === "lineload" ? "line" : "moment");
 export const isLoad = (s: Sym): s is AnyLoad => s.type === "load" || s.type === "lineload" || s.type === "moment";
 
-export type Sym = Support | Frame | CenterMark | Balloon | Fill | Hatch | Datum | Note | AnyLoad | Diagram | Trace;
+export type Sym = Support | Frame | CenterMark | Balloon | Fill | Hatch | Datum | Note | AnyLoad | Diagram | Trace | Etalon | RightAngle;
 
 /** Everything a symbol needs to exist; it is removed when any of these is. */
 export function symbolRefs(s: Sym): Id[] {
@@ -459,7 +501,10 @@ export function symbolRefs(s: Sym): Id[] {
     case "lineload": return [s.on];
     case "diagram": return s.axis ? [s.on, s.axis.a, s.axis.b, ...(s.axis.o ? [s.axis.o] : [])] : [s.on];
     case "frame": return s.at ? [s.at] : [];
-    case "note": return [];
+    case "note":
+    case "etalon":
+      return [];
+    case "rightangle": return [s.l1, s.l2];
     case "centermark":
     case "hatch":
       return [s.on];

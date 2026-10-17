@@ -18,8 +18,8 @@ import {
 } from "./geom";
 import {
   type Prim, PAPER, printMm, geometryBox, buildPrims, dimensionPrims,
-  primDistance, textCentre, distanceFrame, angleFrame, roundFrame, symbolPosition, balloonAnchor,
-  curveParam, sideOfCurve, formatNumber, frameTips, arrowLabelAt, arrowAnchor, centerMarkEnds,
+  primDistance, textCentre, distanceFrame, angleFrame, roundFrame, symbolPosition, balloonAnchor, measuredValue,
+  curveParam, sideOfCurve, formatNumber, frameTips, arrowLabelAt, arrowAnchor, centerMarkEnds, etalonEnds, rightAngleFrame,
   centerMarkDashes, curveLength, hatchCount, standardWeight, loadScaleOf, loadLabel, loadReach, lineLoadFrame,
 } from "./prims";
 import {
@@ -51,12 +51,12 @@ type LineTool = (typeof LINE_TOOLS)[number];
 const isLineTool = (t: Tool): t is LineTool => (LINE_TOOLS as readonly Tool[]).includes(t);
 /** Tools that take a centre, a start and a sweep, and make an arc. */
 const isArcTool = (t: Tool): t is "arc" | "arcarrow" | "arcdamper" => t === "arc" || t === "arcarrow" || t === "arcdamper";
-type SymbolTool = "pin" | "roller" | "wall" | "frame" | "centermark" | "balloon" | "fill" | "hatch" | "datum" | "mass" | "note" | "load" | "lineload" | "moment" | "diagram";
+type SymbolTool = "pin" | "roller" | "wall" | "frame" | "centermark" | "balloon" | "fill" | "hatch" | "datum" | "mass" | "note" | "load" | "lineload" | "moment" | "diagram" | "etalon" | "rightangle";
 /** Tools that copy what is selected and take one more click to say how: about which line, around which point. */
 type CopyTool = "mirror" | "turn";
 type Command =
   | "horizontal" | "vertical" | "parallel" | "perpendicular" | "equal" | "coincident"
-  | "midpoint" | "tangent" | "fixed" | "dimension";
+  | "midpoint" | "tangent" | "fixed" | "dimension" | "measure";
 /** A constraint or the dimension command is a tool too: pick it, then the geometry. */
 type Tool = "select" | DrawTool | "trim" | CopyTool | SymbolTool | Command;
 /** Sketch holds what shapes the geometry; Annotate what is added to the figure; Dynamics what a model that moves is drawn with. */
@@ -92,7 +92,9 @@ type Pending =
   /** A curved beam: the centre of the bend, where it starts, where it ends after the sweep, then how wide it is. */
   | { tool: "arcbeam"; center: Snap; start?: Snap; end?: Snap; sweep: number; lastAng: number }
   /** A balloon whose leader has been anchored and whose circle is still to be placed. */
-  | { tool: "balloon"; anchor: Snap };
+  | { tool: "balloon"; anchor: Snap }
+  /** The mark of a right angle whose first line has been clicked, at `at`. */
+  | { tool: "rightangle"; l1: Id; at: V };
 
 type DragState =
   /** `quiet`: the press already confirmed a typed value, so releasing does nothing more. */
@@ -112,6 +114,10 @@ type DragState =
   | { kind: "axis"; id: Id; axis: "x" | "y"; startScreen: V; slack: number; moved: boolean; edit?: EditTarget }
   /** Pulling an end of a centre mark to make the mark larger or smaller. */
   | { kind: "reach"; id: Id; startScreen: V; moved: boolean }
+  /** Moving what a balloon points at; `centre` is where the balloon is, and stays. */
+  | { kind: "tip"; id: Id; startScreen: V; centre: V; moved: boolean }
+  /** Pulling the far end of an etalon to set how long it is. */
+  | { kind: "stretch"; id: Id; startScreen: V; moved: boolean }
   /** Trimming with the button held: everything the pointer passes over goes. `cut`: something has been trimmed. */
   | { kind: "trim"; last: V; cut: boolean; trail: V[] }
   /** Moving the name of an arrow; `origin` is its offset from the arrow's middle when the drag began. */
@@ -123,6 +129,7 @@ type EditTarget =
   | { kind: "dim"; id: Id }
   | { kind: "balloon"; id: Id }
   | { kind: "datum"; id: Id }
+  | { kind: "etalon"; id: Id }
   | { kind: "note"; id: Id }
   /** The name of a force, a spread load or a moment. */
   | { kind: "load"; id: Id }
@@ -177,6 +184,7 @@ const TOOLS: ToolDef[] = [
   { id: "tangent", label: "Tangent", key: "T", icon: "tangent", tab: "sketch", group: 3, need: "a line and a circle or arc, or two circles or arcs" },
   { id: "fixed", label: "Fix point", key: "F", icon: "fixed", tab: "sketch", group: 3, need: "a point" },
 
+  { id: "measure", label: "Measure", icon: "measure", tab: "annotate", group: 1, need: "a line, two points, two lines, or a circle" },
   { id: "pin", label: "Pin", icon: "pin", tab: "annotate", group: 2 },
   { id: "roller", label: "Roller", icon: "roller", tab: "annotate", group: 2 },
   { id: "wall", label: "Fixed", icon: "wall", tab: "annotate", group: 2 },
@@ -190,7 +198,9 @@ const TOOLS: ToolDef[] = [
   { id: "datum", label: "Datum point", icon: "datum", tab: "annotate", group: 4 },
   { id: "note", label: "Note", key: "N", icon: "note", tab: "annotate", group: 4 },
   { id: "centermark", label: "Centre mark", icon: "centermark", tab: "annotate", group: 4 },
+  { id: "rightangle", label: "Right angle", icon: "rightangle", tab: "annotate", group: 4 },
   { id: "balloon", label: "Balloon", key: "B", icon: "balloon", tab: "annotate", group: 4 },
+  { id: "etalon", label: "Etalon", icon: "etalon", tab: "annotate", group: 4 },
   { id: "fill", label: "Fill", icon: "fill", tab: "annotate", group: 5 },
   { id: "hatch", label: "Hatching", icon: "hatch", tab: "annotate", group: 5 },
 
@@ -202,11 +212,13 @@ const TOOLS: ToolDef[] = [
 ];
 
 const COMMAND_IDS: Command[] = [
-  "horizontal", "vertical", "parallel", "perpendicular", "equal", "coincident", "midpoint", "tangent", "fixed", "dimension",
+  "horizontal", "vertical", "parallel", "perpendicular", "equal", "coincident", "midpoint", "tangent", "fixed", "dimension", "measure",
 ];
+/** The commands that are placed once their geometry is picked: a dimension, and a measure. */
+const isPlaced = (t: Tool): t is "dimension" | "measure" => t === "dimension" || t === "measure";
 const isCommand = (t: Tool): t is Command => (COMMAND_IDS as Tool[]).includes(t);
 const isSymbolTool = (t: Tool): t is SymbolTool =>
-  ["pin", "roller", "wall", "frame", "centermark", "balloon", "fill", "hatch", "datum", "mass", "note", "load", "lineload", "moment", "diagram"].includes(t);
+  ["pin", "roller", "wall", "frame", "centermark", "balloon", "fill", "hatch", "datum", "mass", "note", "load", "lineload", "moment", "diagram", "etalon", "rightangle"].includes(t);
 const isCopyTool = (t: Tool): t is CopyTool => t === "mirror" || t === "turn";
 const toolDef = (t: Tool | "shift" | "construction"): ToolDef => TOOLS.find((d) => d.id === t)!;
 
@@ -236,6 +248,16 @@ const ratioValue = (pos: number, [lo, hi]: [number, number]) => lo * (hi / lo) *
 const DATUM_COLORS = ["#d32f2f", "#1565c0", "#2e7d32", "#ef6c00", "#6a1b9a", "#17201b"];
 /** Colours offered for loads: red first, as the usual way to set them apart from the structure. */
 const LOAD_COLORS = ["#d32f2f", "#1565c0", "#2e7d32", "#ef6c00", "#6a1b9a", "#17201b"];
+/** Colours a line, circle or arc can be drawn in, besides black. */
+const CURVE_COLORS = ["#d32f2f", "#1565c0", "#2e7d32", "#ef6c00", "#6a1b9a", "#8a968e"];
+/** How long a new etalon is on paper, in mm, before it is rounded to a round length of the drawing. */
+const ETALON_MM = 22;
+/** A round number near v: 1, 2 or 5 times a power of ten. */
+function roundNumber(v: number): number {
+  const pow = 10 ** Math.floor(Math.log10(v));
+  const m = v / pow;
+  return (m < 1.5 ? 1 : m < 3.5 ? 2 : m < 7.5 ? 5 : 10) * pow;
+}
 /** How large the first load of each kind is drawn, in screen pixels: a force's length, the height of a spread load, a moment's radius. */
 const LOAD_START: Record<LoadKind, number> = { force: 64, line: 34, moment: 30 };
 /** How far apart the arrows of a new spread load are, in screen pixels. */
@@ -380,6 +402,8 @@ export class App {
   private frame = 0;
   private chromeDirty = true;
   private hintOverride: string | null = null;
+  /** What the last right-click through a stack picked, and where: said in the status bar while the pointer stays there. */
+  private cycleNote: { pos: V; text: string } | null = null;
   private toastTimer = 0;
   private focusTimer = 0;
 
@@ -741,6 +765,8 @@ export class App {
       const tips = frameTips(this.sk, s, mm);
       at = [tips.x, tips.y].filter((t): t is V => t !== null);
     } else if (s.type === "centermark") at = centerMarkEnds(this.sk, s, mm);
+    else if (s.type === "etalon") at = [etalonEnds(s, mm)[1]];
+    else if (s.type === "balloon" && Math.hypot(s.dx, s.dy) > 1e-12) at = [mul(balloonAnchor(this.sk, s), mm)];
     else if (s.type === "lineload") {
       const f = lineLoadFrame(this.sk, s, mm);
       if (f) at = [f.e0, f.e1];
@@ -779,6 +805,7 @@ export class App {
   }
 
   private toolHint(): string {
+    if (this.cycleNote && dist(this.cursor, this.cycleNote.pos) < 6) return this.cycleNote.text;
     const hint = this.toolHintFor();
     // While Construction is on, the drawing tools say so: what they make is left out of the figure.
     const drawing = this.tool === "line" || this.tool === "centerline" || this.tool === "circle" || this.tool === "arc";
@@ -853,6 +880,14 @@ export class App {
         return this.canApply("dimension")
           ? "Middle-click, or click empty space, where the dimension should go. Its position picks aligned, horizontal or vertical."
           : `Dimension: click a line, two points, two lines, or a circle. ${done}`;
+      case "measure":
+        return this.canApply("measure")
+          ? "Middle-click, or click empty space, where the measure should go. It shows the value and changes nothing."
+          : `Measure: click a line, two points, two lines, or a circle. Only you see it: it is left out of the figure. ${done}`;
+      case "etalon": return `Click where the etalon starts. Drag its far end to set how long it is, and give it its unit in the side panel. ${done}`;
+      case "rightangle":
+        return p?.tool === "rightangle" ? "Click the second line, on the side of the corner the mark goes in."
+          : `Click the first of two lines that meet, on the side of the corner the mark goes in. ${done}`;
       case "fixed": return `Fix point: click a point to fix it, or a fixed one to release it. ${done}`;
       default: {
         const info = toolDef(this.tool);
@@ -876,6 +911,8 @@ export class App {
     if (!p || this.drag?.kind === "pan") return null;
     const snap = this.snapAt(this.cursor, this.snapAnchor());
     const pv: Preview = { lines: [], circles: [], arcs: [], points: [] };
+    // The first line of a right angle shows as picked; there is nothing else to draw yet.
+    if (p.tool === "rightangle") return null;
     if (p.tool === "balloon") {
       const raw = toModel(this.view, this.cursor);
       pv.lines.push([p.anchor.pos, raw]);
@@ -954,10 +991,10 @@ export class App {
 
   /** The dimension the Dimension tool would place at the pointer right now. */
   private dimensionPreview(mm: number): Prim[] {
-    if (this.tool !== "dimension" || this.editing || this.drag || !this.canApply("dimension")) return [];
+    if (!isPlaced(this.tool) || this.editing || this.drag || !this.canApply(this.tool)) return [];
     const draft = this.dimensionDraft(toModel(this.view, this.cursor));
     if (typeof draft === "string") return [];
-    return dimensionPrims(this.sk, { ...draft, id: PREVIEW_REF } as Dimension, mm);
+    return dimensionPrims(this.sk, { ...draft, id: PREVIEW_REF, ...(this.tool === "measure" ? { measure: true } : {}) } as Dimension, mm);
   }
 
   // ---- hit testing and snapping -----------------------------------------------
@@ -1025,6 +1062,46 @@ export class App {
     }
     this.lastPick = hit ? { pos: sp, id: hit.id, time } : null;
     return hit;
+  }
+
+  /**
+   * A right-click where several things lie on top of each other: selects the
+   * next of them, the one on top first. False when there is no such stack
+   * under the pointer, and the right-click cancels as it always does.
+   */
+  private cycleUnder(sp: V): boolean {
+    if (this.tool !== "select" || this.pending || this.editing) return false;
+    const stack = this.hitCandidates(sp);
+    if (stack.length < 2) return false;
+    const now = this.selection.size === 1 ? stack.findIndex((h) => this.selection.has(h.id)) : -1;
+    const i = (now + 1) % stack.length;
+    const next = stack[i];
+    this.selection = new Set([next.id]);
+    this.lastPick = { pos: sp, id: next.id, time: performance.now() };
+    this.cycleNote = { pos: sp, text: `${i + 1} of ${stack.length} here: ${this.nameOf(next.id)}. Right-click again for the next.` };
+    this.touch();
+    return true;
+  }
+
+  /** What something in the sketch is, in a word or two, for the status bar. */
+  private nameOf(id: Id): string {
+    const e = entity(this.sk, id);
+    if (e) {
+      if (e.type === "point") return id === ORIGIN ? "the origin" : "a point";
+      if (e.type === "circle") return "a circle";
+      if (e.element) return e.element === "spiral" ? "a torsion spring" : `a ${e.type === "arc" ? "torsion " : ""}${e.element}`;
+      if (e.arrow) return e.type === "arc" ? "a curved arrow" : "an arrow";
+      return e.construction ? `a construction ${e.type}` : e.centre ? "a centre line" : e.type === "arc" ? "an arc" : "a line";
+    }
+    const c = constraint(this.sk, id);
+    if (c) return isDimension(c) && c.measure ? "a measure" : isDimension(c) ? "a dimension" : `a ${RELATION_NAMES[c.type]?.toLowerCase() ?? "constraint"} constraint`;
+    const sym = symbol(this.sk, id);
+    const names: Partial<Record<Sym["type"], string>> = {
+      support: "a support", frame: "a pair of axes", centermark: "a centre mark", balloon: "a balloon", fill: "a fill", hatch: "hatching",
+      datum: "a datum point", note: "a note", load: "a force", lineload: "a distributed load", moment: "a moment", diagram: "a diagram",
+      trace: "a plot", etalon: "an etalon", rightangle: "a right-angle mark",
+    };
+    return sym ? names[sym.type] ?? "a symbol" : "something";
   }
 
   /** The point a drawing tool's next click is measured from, for H/V inference. */
@@ -1600,6 +1677,45 @@ export class App {
       return;
     }
 
+    if (tool === "etalon") {
+      // As long as a round number of the drawing's units that comes out at about 2 cm in print.
+      const snap = this.snapAt(sp);
+      const e = addSymbol(this.sk, { type: "etalon", x: snap.pos[0], y: snap.pos[1], angle: 0, length: roundNumber(ETALON_MM / printMm(this.sk)), label: "" });
+      this.commit();
+      this.setTool("select");
+      this.selection = new Set([e.id]);
+      return;
+    }
+
+    if (tool === "rightangle") {
+      // Two lines, each clicked on the side of the corner the mark goes in.
+      const hit = this.hitCandidates(sp, true).find((h) => entity(this.sk, h.id)?.type === "line");
+      if (!hit) return this.toast("Click a line.");
+      const p = this.pending;
+      if (p?.tool !== "rightangle") {
+        this.pending = { tool: "rightangle", l1: hit.id, at: raw };
+        this.selection = new Set([hit.id]);
+        return;
+      }
+      if (hit.id === p.l1) return;
+      const ends = (id: Id): [V, V] => { const l = entity(this.sk, id) as Line; const a = point(this.sk, l.p1), b = point(this.sk, l.p2); return [[a.x, a.y], [b.x, b.y]]; };
+      const [A1, B1] = ends(p.l1), [A2, B2] = ends(hit.id);
+      const d1 = norm(sub(B1, A1)), d2 = norm(sub(B2, A2));
+      const c = Math.abs(cross(d1, d2)) > 1e-6 ? intersectLines(A1, d1, A2, d2) : null;
+      if (!c) return this.toast("Those lines are parallel: they make no corner to mark.");
+      // Which way along each line from the corner: towards where it was clicked, or, clicked at the corner, towards its far end.
+      const side = (at: V, d: V, A: V, B: V): 1 | -1 => {
+        const t = dot(sub(at, c), d);
+        if (Math.abs(t) * this.view.scale > 4) return t > 0 ? 1 : -1;
+        return dist(c, B) >= dist(c, A) ? 1 : -1;
+      };
+      const mark = addSymbol(this.sk, { type: "rightangle", l1: p.l1, l2: hit.id, s1: side(p.at, d1, A1, B1), s2: side(raw, d2, A2, B2) });
+      this.pending = null;
+      this.commit();
+      this.selection = new Set([mark.id]);
+      return;
+    }
+
     if (tool === "note") {
       // The note is typed where it was clicked; one left empty is not kept.
       const n = addSymbol(this.sk, { type: "note", x: raw[0], y: raw[1], text: "" });
@@ -1948,7 +2064,7 @@ export class App {
       s.side = off >= 0 ? 1 : -1;
       const whole = curveLength(this.sk, s.on);
       s.depth = Math.max(whole * HATCH_REACH[0], Math.min(whole * HATCH_REACH[1], Math.abs(off)));
-    } else if (s.type === "note") {
+    } else if (s.type === "note" || s.type === "etalon") {
       const pos = add(d.origin, sub(m, d.startModel));
       s.x = pos[0];
       s.y = pos[1];
@@ -1982,6 +2098,48 @@ export class App {
     const length = Math.max(2 * PAPER.arrowLen, size) / mm;
     if (d.axis === "x") s.xSize = length;
     else s.ySize = length;
+  }
+
+  /** True when a screen position is on one of the handles drawn for the selected symbol. */
+  private gripsAt(sp: V): boolean {
+    return this.grips(this.mm()).some((g) => dist(g, sp) < 9);
+  }
+
+  /** Points a balloon's leader at whatever is under the pointer; the balloon itself stays where it is. */
+  private dragBalloonTip(d: Extract<DragState, { kind: "tip" }>, sp: V): void {
+    const s = symbol(this.sk, d.id);
+    if (s?.type !== "balloon") return;
+    const snap = this.snapAt(sp);
+    delete s.at;
+    delete s.on;
+    delete s.t;
+    if (snap.pointId) s.at = snap.pointId;
+    else if (snap.curveId) {
+      s.on = snap.curveId;
+      s.t = curveParam(this.sk, snap.curveId, snap.pos);
+    }
+    [s.x, s.y] = snap.pos;
+    const anchor = balloonAnchor(this.sk, s);
+    s.dx = d.centre[0] - anchor[0];
+    s.dy = d.centre[1] - anchor[1];
+  }
+
+  /** Pulls the far end of an etalon: how long it is, at a round length, and which way it runs, in steps of 15 degrees. Alt lets both go free. */
+  private dragEtalonEnd(id: Id, sp: V): void {
+    const s = symbol(this.sk, id);
+    if (s?.type !== "etalon") return;
+    const v = sub(toModel(this.view, sp), [s.x, s.y]);
+    const length = Math.hypot(v[0], v[1]);
+    if (length * this.view.scale < 8) return;
+    if (this.altKey) {
+      s.length = length;
+      s.angle = angleOf(v);
+      return;
+    }
+    // Two figures are kept, so the length is a number to write on it.
+    const step = 10 ** (Math.floor(Math.log10(length)) - 1);
+    s.length = Number((Math.round(length / step) * step).toPrecision(12));
+    s.angle = wrap(Math.round(angleOf(v) / (15 * DEG)) * 15 * DEG);
   }
 
   /** True when a screen position is on one of the four ends of a centre mark. */
@@ -2027,7 +2185,7 @@ export class App {
     let turned = false;
     for (const id of this.selection) {
       const s = symbol(this.sk, id);
-      if (s && (s.type === "support" || s.type === "frame" || s.type === "centermark" || s.type === "load" || s.type === "moment")) {
+      if (s && (s.type === "support" || s.type === "frame" || s.type === "centermark" || s.type === "load" || s.type === "moment" || s.type === "etalon")) {
         s.angle = wrap(s.angle + by + Math.PI) - Math.PI;
         turned = true;
       }
@@ -2102,6 +2260,12 @@ export class App {
       this.drag = grip === "peak" ? { kind: "height", id: chosen.id, startScreen: sp, moved: false } : { kind: "span", id: chosen.id, end: grip, startScreen: sp, moved: false };
       return this.touch();
     }
+    // And the far end of a selected etalon, and the tip of a selected balloon's leader.
+    if (chosen && !ev.shiftKey && this.gripsAt(sp)) {
+      if (chosen.type === "etalon") this.drag = { kind: "stretch", id: chosen.id, startScreen: sp, moved: false };
+      else if (chosen.type === "balloon") this.drag = { kind: "tip", id: chosen.id, startScreen: sp, centre: add(balloonAnchor(this.sk, chosen), [chosen.dx, chosen.dy]), moved: false };
+      if (this.drag) return this.touch();
+    }
 
     const hit = this.pickAt(sp, ev.timeStamp, !ev.shiftKey);
     if (!hit || hit.kind === "fill") {
@@ -2137,6 +2301,7 @@ export class App {
         const edit: EditTarget | undefined = !hit.text ? undefined
           : s.type === "balloon" ? { kind: "balloon", id: hit.id }
           : s.type === "datum" ? { kind: "datum", id: hit.id }
+          : s.type === "etalon" ? { kind: "etalon", id: hit.id }
           : s.type === "note" ? { kind: "note", id: hit.id }
           : isLoad(s) ? { kind: "load", id: hit.id } : undefined;
         const origin: V = isLoad(s) && hit.part === "label" ? [s.dx ?? 0, s.dy ?? 0] : this.symbolDragOrigin(s);
@@ -2214,6 +2379,16 @@ export class App {
       d.moved = true;
       this.dragReach(d.id, sp);
       this.chromeDirty = true;
+    } else if (d?.kind === "tip") {
+      if (!d.moved && dist(sp, d.startScreen) < 3) return;
+      d.moved = true;
+      this.dragBalloonTip(d, sp);
+      this.chromeDirty = true;
+    } else if (d?.kind === "stretch") {
+      if (!d.moved && dist(sp, d.startScreen) < 3) return;
+      d.moved = true;
+      this.dragEtalonEnd(d.id, sp);
+      this.chromeDirty = true;
     } else if (d?.kind === "span") {
       if (!d.moved && dist(sp, d.startScreen) < 3) return;
       d.moved = true;
@@ -2278,7 +2453,7 @@ export class App {
       if (!d.moved) {
         // A press that did not pan is a click: middle confirms, right cancels.
         if (ev.button === 1 && !d.quiet) this.confirm(this.screenPos(ev));
-        else if (ev.button === 2) this.cancel();
+        else if (ev.button === 2 && !this.cycleUnder(this.screenPos(ev))) this.cancel();
       }
     } else if (d.kind === "box") {
       this.finishBox(d);
@@ -2298,7 +2473,7 @@ export class App {
     } else if ((d.kind === "sym" || d.kind === "axis" || d.kind === "label") && !d.moved && d.edit && ev.type === "pointerup") {
       // The same for a name: a click on it, and it is typed where it stands.
       this.openEditor(d.edit);
-    } else if ((d.kind === "dim" || d.kind === "sym" || d.kind === "axis" || d.kind === "label" || d.kind === "reach" || d.kind === "span" || d.kind === "height") && d.moved) {
+    } else if ((d.kind === "dim" || d.kind === "sym" || d.kind === "axis" || d.kind === "label" || d.kind === "reach" || d.kind === "span" || d.kind === "height" || d.kind === "tip" || d.kind === "stretch") && d.moved) {
       this.commit();
     }
     this.touch();
@@ -2392,7 +2567,7 @@ export class App {
    * the shape being drawn, and with nothing in progress leaves the tool.
    */
   private confirm(sp: V): void {
-    if (this.tool === "dimension" && this.canApply("dimension")) {
+    if (isPlaced(this.tool) && this.canApply(this.tool)) {
       this.placeDimension(sp);
     } else if (this.pending) {
       this.pending = null;
@@ -2552,10 +2727,21 @@ export class App {
     return "Select a line, two points, two lines, or a circle to dimension.";
   }
 
-  /** Creates the dimension for the current picks and opens its value for typing. */
-  private createDimension(at?: V): void {
+  /**
+   * Creates the dimension for the current picks and opens its value for
+   * typing. With `measure`, a measure instead: it drives nothing, so it is
+   * simply added, and there is no value to type.
+   */
+  private createDimension(at?: V, measure = this.tool === "measure"): void {
     const draft = this.dimensionDraft(at);
     if (typeof draft === "string") return this.toast(draft);
+    if (measure) {
+      const m = addConstraint(this.sk, { ...draft, measure: true } as ConstraintDraft);
+      this.commit();
+      this.selection = isCommand(this.tool) ? new Set() : new Set([m.id]);
+      this.touch();
+      return;
+    }
     const made = this.addManual([draft], "That dimension would over-constrain the sketch.");
     if (!made) {
       if (isCommand(this.tool)) this.selection.clear();
@@ -2570,9 +2756,10 @@ export class App {
     this.createDimension(toModel(this.view, sp));
   }
 
-  /** The number shown to the user: degrees for angles, plain value otherwise. */
+  /** The number shown to the user: degrees for angles, plain value otherwise. A measure shows what it measures now. */
   private shownValue(d: Dimension): string {
-    return formatNumber(d.type === "angle" ? d.value / DEG : d.value);
+    const v = d.measure ? measuredValue(this.sk, d) : d.value;
+    return formatNumber(d.type === "angle" ? v / DEG : v);
   }
 
   private setDimValue(id: Id, text: string): boolean {
@@ -2639,7 +2826,7 @@ export class App {
 
   /** The text prim that shows what an edit target holds, if it is on the drawing right now. */
   private editPrim(t: EditTarget): Extract<Prim, { k: "text" }> | undefined {
-    const part = t.kind === "axis" ? t.axis : t.kind === "datum" || t.kind === "arrow" || t.kind === "load" ? "label" : undefined;
+    const part = t.kind === "axis" ? t.axis : t.kind === "datum" || t.kind === "arrow" || t.kind === "load" || t.kind === "etalon" ? "label" : undefined;
     return this.prims.find((p): p is Extract<Prim, { k: "text" }> => p.k === "text" && p.ref === t.id && (part === undefined || p.part === part));
   }
 
@@ -2647,7 +2834,8 @@ export class App {
   private editValue(t: EditTarget): string | null {
     if (t.kind === "dim") {
       const d = constraint(this.sk, t.id);
-      // The box shows what the figure shows: the label when there is one, else the number.
+      // A measure has nothing to type. Otherwise the box shows what the figure shows: the label when there is one, else the number.
+      if (d && isDimension(d) && d.measure) return null;
       return d && isDimension(d) ? d.label?.trim() || this.shownValue(d) : null;
     }
     if (t.kind === "arrow") {
@@ -2659,6 +2847,8 @@ export class App {
     if (t.kind === "note") return s?.type === "note" ? s.text : null;
     if (t.kind === "load") return s && isLoad(s) ? s.label : null;
     if (t.kind === "datum") return s?.type === "datum" ? s.label : null;
+    // An etalon with no name of its own shows its length; that is what the box starts with.
+    if (t.kind === "etalon") return s?.type === "etalon" ? s.label.trim() || formatNumber(Number(s.length.toPrecision(6))) : null;
     return s?.type === "frame" ? (t.axis === "x" ? s.xLabel : s.yLabel) : null;
   }
 
@@ -2738,7 +2928,7 @@ export class App {
       } else {
         const s = symbol(this.sk, t.id)!;
         if (s.type === "balloon") s.text = text;
-        else if (s.type === "datum" || isLoad(s)) s.label = text;
+        else if (s.type === "datum" || isLoad(s) || s.type === "etalon") s.label = text;
         else if (s.type === "frame" && t.kind === "axis") {
           if (t.axis === "x") s.xLabel = text;
           else s.yLabel = text;
@@ -2818,6 +3008,7 @@ export class App {
       case "tangent": return (L === 1 && R === 1 && P === 0) || (R === 2 && L === 0 && P === 0);
       case "fixed": return P >= 1 && L + R === 0;
       case "dimension":
+      case "measure":
         return (P === 2 && L + R === 0) || (L === 1 && P + R === 0) || (L === 2 && P + R === 0) || (R === 1 && P + L === 0);
     }
   }
@@ -2831,6 +3022,7 @@ export class App {
       case "horizontal":
       case "vertical":
       case "dimension":
+      case "measure":
         return only(P);
       case "parallel":
       case "perpendicular":
@@ -2856,7 +3048,7 @@ export class App {
 
     const hit = this.hitTest(sp, true);
     if (!hit) {
-      if (cmd === "dimension" && this.canApply(cmd)) this.placeDimension(sp);
+      if (isPlaced(cmd) && this.canApply(cmd)) this.placeDimension(sp);
       else this.selection.clear();
       return;
     }
@@ -2875,8 +3067,8 @@ export class App {
         return;
       }
     }
-    // A dimension waits to be placed; everything else applies at once.
-    if (cmd !== "dimension" && ready()) {
+    // A dimension or a measure waits to be placed; everything else applies at once.
+    if (!isPlaced(cmd) && ready()) {
       this.run(cmd);
       this.selection.clear();
     }
@@ -2889,7 +3081,7 @@ export class App {
   private activate(cmd: Command): void {
     if (this.tool === "select" && this.picked().entities > 0 && this.canApply(cmd)) {
       this.showTip(cmd);
-      if (cmd === "dimension") this.createDimension();
+      if (isPlaced(cmd)) this.createDimension(undefined, cmd === "measure");
       else this.run(cmd);
       return;
     }
@@ -2924,7 +3116,7 @@ export class App {
   }
 
   /** Applies a constraint to the picked geometry. */
-  private run(cmd: Exclude<Command, "dimension">): void {
+  private run(cmd: Exclude<Command, "dimension" | "measure">): void {
     const info = toolDef(cmd);
     if (!this.canApply(cmd)) {
       this.toast(`${info.label} needs ${info.need}.`);
@@ -3414,6 +3606,7 @@ export class App {
   }
 
   private describe(c: Constraint): string {
+    if (isDimension(c) && c.measure) return `Measure ${this.shownValue(c)}${c.type === "angle" ? "°" : ""}`;
     if (isDimension(c)) {
       const unit = c.type === "angle" ? "°" : "";
       const label = c.label?.trim() ? ` shown as ${c.label.trim()}` : "";
@@ -3516,7 +3709,30 @@ export class App {
         const frames: [BalloonFrame, string][] = [["circle", "Circle"], ["box", "Box"], ["underline", "Underline"], ["none", "None"]];
         html += `<div class="field"><span id="frame-label">Around the text</span><div class="segmented wrap" role="group" aria-labelledby="frame-label">${frames.map(([f, name]) =>
           `<button type="button" data-frame="${f}" aria-pressed="${(s.frame ?? "circle") === f}">${name}</button>`).join("")}</div></div>`;
-        html += `<p class="muted note-block">Drag the balloon to move it; its leader keeps pointing at the same spot.</p>`;
+        html += `<p class="muted note-block">Drag the balloon to move it; its leader keeps pointing at the same spot. Drag the handle at the tip of the leader to point it at something else: a joint, a spot on a curve, or anywhere.</p>`;
+        break;
+      }
+      case "etalon":
+        html += `<h2>Etalon</h2>`;
+        html += text("Name", "sym-label", s.label, "What the bar is worth, as TeX math: 1\\,\\mathrm{m}, or 10\\,\\mathrm{kN} for forces drawn at a scale. Left empty, it shows its length in the drawing's units. Clicking it on the drawing edits it there.", true);
+        html += number("Length (in the drawing's units)", "sym-length", formatNumber(Number(s.length.toPrecision(6))), "Dragging the handle at its far end sets this too, at a round length; hold Alt for any length.");
+        html += number("Parts", "sym-parts", String(Math.max(1, Math.round(s.parts ?? 1))), "Marks it off into equal parts with shorter ticks, as on a ruler. 1 has ticks at the ends only.");
+        html += number("Rotation (degrees)", "sym-angle", degrees(s.angle));
+        html += rotate;
+        html += `<p class="muted note-block">Drag the bar to move it.</p>`;
+        break;
+      case "rightangle": {
+        html += `<h2>Right angle</h2>`;
+        html += `<label class="check"><input data-field="sym-dot" type="checkbox"${s.dot ? " checked" : ""}><span>A dot inside the square</span></label>`;
+        html += `<button type="button" class="plain" data-act="ra-corner">Move it to the next corner</button>`;
+        const f = rightAngleFrame(this.sk, s, 1);
+        const held = this.sk.constraints.some((c) => c.type === "perpendicular" && ((c.l1 === s.l1 && c.l2 === s.l2) || (c.l1 === s.l2 && c.l2 === s.l1)));
+        const angle = f ? Math.acos(Math.max(-1, Math.min(1, Math.abs(dot(f.u1, f.u2))))) / DEG : 0;
+        if (held) html += `<p class="muted note-block">The two lines are held at a right angle by a Perpendicular constraint.</p>`;
+        else {
+          html += `<p class="muted note-block">${Math.abs(angle - 90) < 0.05 ? "The two lines are at a right angle now. The mark is only drawn: it holds nothing." : `The two lines are at ${formatNumber(Number(angle.toFixed(2)))}°, not at a right angle.`}</p>`;
+          html += `<button type="button" class="plain" data-act="ra-perp">Hold them at a right angle</button>`;
+        }
         break;
       }
       case "fill":
@@ -3697,12 +3913,27 @@ export class App {
     } else if (isCommand(this.tool) && !(cons.length === 1 && isDimension(cons[0]))) {
       const info = toolDef(this.tool);
       html += `<h2>${info.label}</h2>`;
-      html += this.tool === "dimension"
+      html += this.tool === "measure"
+        ? `<ol class="steps"><li>Click ${info.need}.</li><li>Middle-click, or click empty space, where the measure should go.</li></ol><p class="muted">A measure shows what the geometry measures, in brackets, and changes nothing. Only you see it: it is left out of the print and the exported figure. Drag it like a dimension.</p>`
+        : this.tool === "dimension"
         ? `<ol class="steps"><li>Click ${info.need}.</li><li>Middle-click where the dimension should go. Beside the line gives its length; above or below, the horizontal distance; left or right, the vertical one.</li><li>Type the value and press Enter.</li></ol>`
         : this.tool === "fixed"
           ? `<p class="muted">Click a point to fix it in place. Click a fixed point to release it.</p>`
           : `<p class="muted">Click ${info.need}. The constraint is applied as soon as you have picked them.</p>`;
       html += `<p class="muted">Middle-click or Esc returns to Select.</p>`;
+    } else if (cons.length === 1 && entities === 0 && !syms.length && isDimension(cons[0]) && cons[0].measure) {
+      const d = cons[0];
+      const what = d.type === "distance" ? (d.mode === "aligned" ? "Length" : d.mode === "horizontal" ? "Horizontal distance" : "Vertical distance") : d.type === "angle" ? "Angle" : "Radius";
+      html += `<h2>Measure</h2>`;
+      html += `<p class="measure-value"><span>${what}</span><b>${this.shownValue(d)}${d.type === "angle" ? "°" : ""}</b></p>`;
+      html += `<p class="muted note-block">Shows what the geometry measures now, and follows it as it changes. It drives nothing, and only you see it: it is left out of the print and the exported figure. Drag it to move it.</p>`;
+      if (d.type === "distance") {
+        const modes: [DistanceMode, string][] = [["aligned", "Aligned"], ["horizontal", "Horizontal"], ["vertical", "Vertical"]];
+        html += `<div class="field"><span id="mode-label">Measured</span><div class="segmented" role="group" aria-labelledby="mode-label">${modes.map(([m, name]) =>
+          `<button type="button" data-mode="${m}" aria-pressed="${d.mode === m}">${name}</button>`).join("")}</div></div>`;
+      }
+      html += `<button type="button" class="plain" data-act="measure-to-dim" title="A dimension of the value it shows now: it then holds the geometry to it">Make it a dimension</button>`;
+      html += `<button type="button" class="danger" data-act="delete">Delete measure</button>`;
     } else if (cons.length === 1 && entities === 0 && !syms.length && isDimension(cons[0])) {
       const d = cons[0];
       html += `<h2>${RELATION_NAMES[d.type]}</h2>`;
@@ -3783,6 +4014,7 @@ export class App {
               : "Turns the selection into construction lines: dashed here, and left out of the print and the exported figure."}</small></div>`;
         }
         html += this.elementPanel();
+        html += this.curveColorField(cs);
         // One slider for all of them; it shows the thickness of the first.
         const weight = cs[0].weight ?? standardWeight(cs[0]);
         const own = cs.some((c) => c.weight !== undefined);
@@ -3914,6 +4146,7 @@ export class App {
         if (ds.frame === "circle") delete x.frame;
         else x.frame = ds.frame as BalloonFrame;
       });
+      else if (ds.ccolor) this.setCurveColor(ds.ccolor === "none" ? null : ds.ccolor);
       else if (ds.color) this.setColor(ds.color);
       else if (ds.head) this.setArrowHead(ds.head as ArrowEnds);
       else if (ds.place) this.setRadiusPlace(ds.place === "outside");
@@ -4072,6 +4305,21 @@ export class App {
         return;
       case "delete": return this.deleteSelection();
       case "rotate": return this.rotateSelected(Math.PI / 2);
+      case "measure-to-dim": return this.measureToDimension();
+      case "ra-corner":
+        // Round the four corners the two lines make, one at a time.
+        return this.editSymbol((x) => {
+          if (x.type !== "rightangle") return;
+          if (x.s1 === x.s2) x.s2 = x.s2 === 1 ? -1 : 1;
+          else x.s1 = x.s1 === 1 ? -1 : 1;
+        });
+      case "ra-perp": {
+        const m = this.selectedSymbol();
+        if (m?.type !== "rightangle") return;
+        const keep = this.selection;
+        if (this.addManual([{ type: "perpendicular", l1: m.l1, l2: m.l2 }], "The two lines are already held at a right angle.")) this.selection = keep;
+        return this.touch();
+      }
       case "flip":
         return this.editSymbol((x) => { if (x.type === "hatch" || x.type === "lineload" || x.type === "diagram") x.side = x.side === 1 ? -1 : 1; });
       case "edit-plot": return this.editPlotOf(this.selectedSymbol());
@@ -4152,6 +4400,29 @@ export class App {
   /** One of an element's sizes as it is shown beside its slider, in the drawing's units. */
   private elementSizeLabel(e: Line | Arc, what: "across" | "pitch"): string {
     return formatNumber(Number(lookOf(this.sk, e)[what].toPrecision(3)));
+  }
+
+  /** The colour of the selected curves: black, one of a few, or any other. */
+  private curveColorField(cs: Curve[]): string {
+    const now = (c: Curve) => c.color ?? "";
+    const shared = cs.every((c) => now(c) === now(cs[0])) ? now(cs[0]) : null;
+    const swatch = (c: string, name: string) =>
+      `<button type="button" class="swatch" data-ccolor="${c || "none"}" aria-pressed="${shared === c}" aria-label="${name}" title="${name}" style="background:${c || "#17201b"}"></button>`;
+    return `<div class="field"><span id="ccolour-label">Colour</span><div class="swatches" role="group" aria-labelledby="ccolour-label">` +
+      swatch("", "Black") + CURVE_COLORS.map((c) => swatch(c, `Colour ${c}`)).join("") +
+      `<label class="swatch custom" title="Another colour"><input data-field="curve-color" type="color" value="${esc(shared || "#17201b")}" aria-label="Another colour"></label></div>` +
+      `<small>${cs.some((c) => c.construction) ? "A construction line keeps its own colours in the editor. " : ""}An arrow's head and name take its colour too.</small></div>`;
+  }
+
+  /** Draws the selected curves in a colour, or in black again with null. */
+  private setCurveColor(color: string | null): void {
+    if (color !== null && !/^#[0-9a-f]{6}$/i.test(color)) return;
+    const { lines, rounds } = this.picked();
+    for (const c of [...lines, ...rounds]) {
+      if (color && color.toLowerCase() !== "#17201b") c.color = color;
+      else delete c.color;
+    }
+    this.commit();
   }
 
   /** The side panel's fields for the selected springs or dampers: how they are drawn. */
@@ -4306,6 +4577,25 @@ export class App {
     this.commit();
   }
 
+  /** Turns the selected measure into a dimension of what it measures now, which then holds the geometry to it. */
+  private measureToDimension(): void {
+    const d = this.selectedDimension();
+    if (!d?.measure) return;
+    const before = clone(this.sk);
+    const baseline = this.result;
+    d.value = measuredValue(this.sk, d);
+    delete d.measure;
+    const r = this.solver.solve(this.sk);
+    if (!r.ok || r.conflicting.length > baseline.conflicting.length || r.redundant.length > baseline.redundant.length) {
+      this.sk = before;
+      this.solve();
+      this.toast("As a dimension it would over-constrain the sketch.");
+      return this.touch();
+    }
+    this.result = r;
+    this.commit();
+  }
+
   private setDimMode(mode: DistanceMode): void {
     const d = this.selectedDimension();
     if (!d || d.type !== "distance" || d.mode === mode) return;
@@ -4347,7 +4637,7 @@ export class App {
       if (!s) return;
       const v = parseNumber(input.value);
       const label = input.value.trim().replace(/^\$+|\$+$/g, "");
-      if (field === "sym-angle" && (s.type === "support" || s.type === "frame" || s.type === "centermark" || s.type === "load" || s.type === "moment" || s.type === "trace")) {
+      if (field === "sym-angle" && (s.type === "support" || s.type === "frame" || s.type === "centermark" || s.type === "load" || s.type === "moment" || s.type === "trace" || s.type === "etalon")) {
         if (!Number.isFinite(v)) { this.toast("Type the rotation as a number of degrees."); return this.touch(); }
         s.angle = v * DEG;
       } else if (s.type === "centermark" && field === "sym-scale") {
@@ -4374,7 +4664,19 @@ export class App {
         if (!input.value.trim()) { this.toast("A note needs some text. Delete removes it."); return this.touch(); }
         s.text = input.value.trim();
       }
-      else if ((s.type === "datum" || isLoad(s)) && field === "sym-label") s.label = label;
+      else if ((s.type === "datum" || isLoad(s) || s.type === "etalon") && field === "sym-label") s.label = label;
+      else if (s.type === "etalon" && field === "sym-length") {
+        if (!(v > 0)) { this.toast("The length is a number above zero, in the drawing's units."); return this.touch(); }
+        s.length = v;
+      } else if (s.type === "etalon" && field === "sym-parts") {
+        const n = Math.round(v);
+        if (!(n >= 1 && n <= 50)) { this.toast("The number of parts is a whole number from 1 to 50."); return this.touch(); }
+        if (n === 1) delete s.parts;
+        else s.parts = n;
+      } else if (s.type === "rightangle" && field === "sym-dot") {
+        if (input.checked) s.dot = true;
+        else delete s.dot;
+      }
       else if (isLoad(s) && field === "sym-size") {
         const magnitude = s.type === "lineload" ? Math.max(s.q1, s.q2) : s.value;
         if (!Number.isFinite(v) || magnitude <= 0) return;
@@ -4472,6 +4774,8 @@ export class App {
       else this.sk.supportScale = pct / 100;
       return slide(`${pct} %`);
     }
+
+    if (field === "curve-color") return this.setCurveColor(input.value);
 
     if (field === "weight") {
       const v = Math.max(WEIGHT_MIN, Math.min(WEIGHT_MAX, Number(input.value)));

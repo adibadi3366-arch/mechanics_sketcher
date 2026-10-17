@@ -6,6 +6,7 @@ import {
   type Sketch, type Id, type Dimension, type DistanceDim, type AngleDim, type RadiusDim,
   type Arc, type Line, type Curve, type Sym, type Support, type Frame, type CenterMark, type Balloon,
   type Fill as FillSym, type Hatch, type Datum, type Note, type Load, type LineLoad, type Moment, type AnyLoad, type LoadKind, type Diagram, type Trace,
+  type Etalon, type RightAngle,
   entity, point, arcRadius, arcAngles, isDimension, isNamed, geometryBox, geometryExtent,
 } from "./model";
 import { elementPaths, elementReach } from "./element";
@@ -56,7 +57,13 @@ export const PAPER = {
   radiusLeader: 8,      // default length of a radius leader drawn outside the circle
   loadHead: 0.62,       // the heads of a spread load's arrows, against a dimension's
   loadShade: 0.16,      // how much of a spread load's colour is in the shading under its arrows
+  etalonTick: 1.4,      // half the height of the ticks at the ends of an etalon
+  etalonPart: 0.8,      // and of those between its parts
+  rightAngle: 2.2,      // side of the square that marks a right angle
 };
+
+/** The colour a measure is drawn in, in the editor: it is never part of the figure. */
+export const MEASURE_INK = "#0b7285";
 
 export type Anchor = "c" | "n" | "s" | "e" | "w" | "ne" | "nw" | "se" | "sw";
 export type StrokeStyle = "member" | "construction" | "dim" | "symbol" | "hatch" | "centre" | "centreline" | "arrow" | "element";
@@ -405,12 +412,50 @@ function radiusPrims(sk: Sketch, d: RadiusDim, mm: number): Prim[] {
   return [line, { ...base, k: "text", at: mid(f.far, f.tip), tex: dimTex(d), anchor: anchorFor(side) }];
 }
 
-export function dimensionPrims(sk: Sketch, d: Dimension, mm: number): Prim[] {
+export function dimensionPrims(sk: Sketch, given: Dimension, mm: number): Prim[] {
+  // A measure is laid out like a dimension of what it measures now, and shows that in brackets.
+  let d = given;
+  if (given.measure) {
+    const { label: _, ...rest } = given;
+    d = { ...rest, value: measuredValue(sk, given) } as Dimension;
+  }
   const prims = d.type === "distance" ? distancePrims(sk, d, mm)
     : d.type === "angle" ? anglePrims(sk, d, mm)
     : radiusPrims(sk, d, mm);
   if (d.hidden) prims.forEach((p) => { p.ghost = true; });
+  if (given.measure) {
+    for (const p of prims) {
+      p.ink = MEASURE_INK;
+      if (p.k === "text") p.tex = `(${p.tex})`;
+    }
+  }
   return prims;
+}
+
+/**
+ * What a dimension measures in the sketch as it is now: a distance, an angle
+ * in radians counter-clockwise from its first line to its second, or a radius.
+ */
+export function measuredValue(sk: Sketch, d: Dimension): number {
+  if (d.type === "distance") {
+    const a = point(sk, d.a), b = point(sk, d.b);
+    if (d.mode === "horizontal") return Math.abs(b.x - a.x);
+    if (d.mode === "vertical") return Math.abs(b.y - a.y);
+    return Math.hypot(b.x - a.x, b.y - a.y);
+  }
+  if (d.type === "radius") {
+    const e = entity(sk, d.target);
+    return e?.type === "circle" ? e.r : e?.type === "arc" ? arcRadius(sk, e) : 0;
+  }
+  const l1 = entity(sk, d.l1), l2 = entity(sk, d.l2);
+  if (l1?.type !== "line" || l2?.type !== "line") return 0;
+  const dir = (l: Line, rev: boolean): V => {
+    const a = point(sk, rev ? l.p2 : l.p1), b = point(sk, rev ? l.p1 : l.p2);
+    return [b.x - a.x, b.y - a.y];
+  };
+  const d1 = dir(l1, d.rev1), d2 = dir(l2, d.rev2);
+  const v = Math.atan2(d1[0] * d2[1] - d1[1] * d2[0], dot(d1, d2));
+  return v < 0 ? v + TWO_PI : v;
 }
 
 // ---- symbols ----------------------------------------------------------------
@@ -484,7 +529,13 @@ export function symbolPosition(sk: Sketch, s: Sym): V {
         return [p.x, p.y];
       }
       return [s.x, s.y];
-    case "note": return [s.x, s.y];
+    case "note":
+    case "etalon":
+      return [s.x, s.y];
+    case "rightangle": {
+      const f = rightAngleFrame(sk, s, 1);
+      return f ? f.c : [0, 0];
+    }
     case "load":
     case "moment": {
       const p = point(sk, s.at);
@@ -711,6 +762,71 @@ export function noteShape(ref: Id, at: V, typed: string): Prim[] {
   const text: TextPrim = { ref, layer: "sym", k: "text", at, tex: noteTex(typed), anchor: "w", latex };
   if (lines > 1) text.lines = lines;
   return [text];
+}
+
+// ---- etalon and right angle ---------------------------------------------------
+
+/** The two ends of an etalon, in paper mm. */
+export function etalonEnds(s: Etalon, mm: number): [V, V] {
+  const a: V = [s.x * mm, s.y * mm];
+  return [a, polar(a, s.length * mm, s.angle)];
+}
+
+/** What an etalon is labelled with: its own name, or else its length in the drawing's units. */
+export function etalonTex(s: Etalon): string {
+  return s.label.trim() ? labelTex(s.label) : formatNumber(Number(s.length.toPrecision(6)));
+}
+
+/** An etalon: the bar, a tick at each end and between its parts, and its name above it, read the right way up. */
+function etalonPrims(s: Etalon, mm: number): Prim[] {
+  const base = { ref: s.id, layer: "sym" as const };
+  const [a, b] = etalonEnds(s, mm);
+  const u: V = [Math.cos(s.angle), Math.sin(s.angle)];
+  // The side its name is on: above the bar as it reads.
+  let rot = s.angle;
+  rot = wrap(rot);
+  if (rot > Math.PI / 2 + 1e-9) rot -= Math.PI;
+  else if (rot <= -Math.PI / 2 + 1e-9) rot += Math.PI;
+  const up: V = [-Math.sin(rot), Math.cos(rot)];
+  const out: Prim[] = [{ ...base, k: "line", a, b, stroke: "symbol" }];
+  const tick = (at: V, half: number) => out.push({ ...base, k: "line", a: add(at, mul(up, half)), b: sub(at, mul(up, half)), stroke: "symbol" });
+  tick(a, PAPER.etalonTick);
+  tick(b, PAPER.etalonTick);
+  const parts = Math.max(1, Math.round(s.parts ?? 1));
+  const L = s.length * mm;
+  for (let i = 1; i < parts; i++) tick(add(a, mul(u, (L * i) / parts)), PAPER.etalonPart);
+  const text: TextPrim = { ...base, k: "text", at: add(mid(a, b), mul(up, PAPER.etalonTick)), tex: etalonTex(s), anchor: "s", part: "label" };
+  if (Math.abs(rot) > 1e-9) text.rot = rot;
+  out.push(text);
+  return out;
+}
+
+/**
+ * Where the mark of a right angle goes, in paper mm: the corner the two lines
+ * make, and the directions along them that the square lies in. Null when the
+ * lines are parallel and make no corner.
+ */
+export function rightAngleFrame(sk: Sketch, s: RightAngle, mm: number): { c: V; u1: V; u2: V } | null {
+  const l1 = entity(sk, s.l1), l2 = entity(sk, s.l2);
+  if (l1?.type !== "line" || l2?.type !== "line") return null;
+  const a1 = P(sk, l1.p1, mm), b1 = P(sk, l1.p2, mm), a2 = P(sk, l2.p1, mm), b2 = P(sk, l2.p2, mm);
+  if (dist(a1, b1) < 1e-9 || dist(a2, b2) < 1e-9) return null;
+  const d1 = norm(sub(b1, a1)), d2 = norm(sub(b2, a2));
+  if (Math.abs(d1[0] * d2[1] - d1[1] * d2[0]) < 1e-6) return null;
+  const c = intersectLines(a1, d1, a2, d2);
+  if (!c) return null;
+  return { c, u1: mul(d1, s.s1), u2: mul(d2, s.s2) };
+}
+
+function rightAnglePrims(sk: Sketch, s: RightAngle, mm: number): Prim[] {
+  const f = rightAngleFrame(sk, s, mm);
+  if (!f) return [];
+  const base = { ref: s.id, layer: "sym" as const };
+  const k = PAPER.rightAngle;
+  const p1 = add(f.c, mul(f.u1, k)), p2 = add(f.c, mul(f.u2, k));
+  const out: Prim[] = [{ ...base, k: "path", pts: [p1, add(p1, mul(f.u2, k)), p2], stroke: "symbol" }];
+  if (s.dot) out.push({ ...base, k: "circle", c: add(f.c, mul(add(f.u1, f.u2), k / 2)), r: PAPER.leaderDot * 0.85, stroke: "symbol", fill: "ink" });
+  return out;
 }
 
 // ---- loads ------------------------------------------------------------------
@@ -1035,6 +1151,8 @@ export function symbolPrims(sk: Sketch, s: Sym, mm: number): Prim[] {
       return loadPrims(sk, s, mm);
     case "diagram": return diagramPrims(sk, s, mm);
     case "trace": return tracePrims(sk, s, mm);
+    case "etalon": return etalonPrims(s, mm);
+    case "rightangle": return rightAnglePrims(sk, s, mm);
   }
 }
 
@@ -1100,13 +1218,15 @@ export function buildPrims(sk: Sketch, mm: number, opts: BuildOptions): Prim[] {
   for (const e of sk.entities) {
     if (e.type === "point") continue;
     if (e.construction && !opts.editor) continue;
-    const base: { ref: Id; layer: "geom"; stroke: StrokeStyle; width?: number; dash?: number[] } = { ref: e.id, layer: "geom", stroke: curveStroke(e) };
+    const base: { ref: Id; layer: "geom"; stroke: StrokeStyle; width?: number; dash?: number[]; ink?: string } = { ref: e.id, layer: "geom", stroke: curveStroke(e) };
     if (e.weight !== undefined) base.width = e.weight * PT_MM;
     if (e.dashed && !e.construction) base.dash = DASHED;
+    // A colour of its own: its line, an arrow's head and its name. A construction line keeps the editor's colours.
+    if (e.color && !e.construction) base.ink = e.color;
     const named = isNamed(e) ? e : null;
     const name = (): void => {
       const at = named ? arrowLabelAt(sk, named, mm) : null;
-      if (at) out.push({ ref: e.id, layer: "geom", k: "text", at, tex: labelTex(named?.label ?? ""), anchor: "c", part: "label" });
+      if (at) out.push({ ref: e.id, layer: "geom", k: "text", at, tex: labelTex(named?.label ?? ""), anchor: "c", part: "label", ...(base.ink ? { ink: base.ink } : {}) });
     };
     if (e.type !== "circle" && e.element && !e.construction) {
       // A spring or a damper: drawn in its place, from one end to the other.
@@ -1147,7 +1267,7 @@ export function buildPrims(sk: Sketch, mm: number, opts: BuildOptions): Prim[] {
   for (const sym of sk.symbols) if (sym.type !== "fill") out.push(...symbolPrims(sk, sym, mm));
   for (const c of sk.constraints) {
     if (!isDimension(c)) continue;
-    if (c.hidden && !opts.editor) continue;
+    if ((c.hidden || c.measure) && !opts.editor) continue;
     out.push(...dimensionPrims(sk, c, mm));
   }
   return out;

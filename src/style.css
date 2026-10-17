@@ -695,3 +695,8 @@ input.tex-shown:not(:focus) {
 }
 .fn-title.typeset { font-family: inherit; }
 .tex-inline { overflow: visible; }
+
+/* The value of a measure, in the side panel. */
+.measure-value { display: flex; justify-content: space-between; align-items: baseline; margin: 0 0 8px; padding: 8px 10px; border-radius: 6px; background: var(--paper); border: 1px solid var(--rule); }
+.measure-value span { color: var(--ink-2); font-size: 13px; }
+.measure-value b { font-size: 17px; color: #0b7285; font-variant-numeric: tabular-nums; }

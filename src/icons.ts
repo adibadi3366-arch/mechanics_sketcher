@@ -74,6 +74,12 @@ export const ICONS: Record<string, string> = {
   param: `<path d="M3.500 3.500V16.500h13" stroke-width="1.200"/><ellipse cx="11" cy="9" rx="4.600" ry="3.400" transform="rotate(-24 11 9)"/>`,
   // Flip axes: a pair of axes, and a turn from the one across to the one up and back.
   flipaxes: `<path d="M3 3v14h14"/><path d="M13 15A8 8 0 0 0 5 7" stroke-width="1.4"/><path d="M11 12.9l2 2.1 2-2.1M7.1 5L5 7l2.1 2" stroke-width="1.4"/>`,
+  // Measure: a dimension in brackets, as a reference dimension is written.
+  measure: `<path d="M4 6v8M16 6v8" stroke-width="1.2"/><path d="M5 10h10" stroke-width="1.2"/><path d="M7.2 8.4L5 10l2.2 1.6M12.8 8.4L15 10l-2.2 1.6" stroke-width="1.1"/><path d="M2.6 3.2Q1.4 10 2.6 16.8M17.4 3.2Q18.6 10 17.4 16.8"/>`,
+  // Etalon: a bar with ticks, and its name above it.
+  etalon: `<path d="M3 13.5h14" stroke-width="1.8"/><path d="M3 10.5v6M17 10.5v6M10 11.7v3.6" stroke-width="1.3"/><path d="M9 5.6l1.4-1.2v5" stroke-width="1.3"/>`,
+  // Right angle: two lines meeting square, and the small square in the corner.
+  rightangle: `<path d="M4 3v13h13"/><path d="M4 10.5h5.5V16" stroke-width="1.2"/>${dot(6.6, 13.3, 1)}`,
   fity: `<path d="M10 3v14M7 5.800L10 3l3 2.800M7 14.200L10 17l3-2.800"/><path d="M3.500 3h3M3.500 17h3M13.500 3h3M13.500 17h3" stroke-width="1.2"/>`,
   // A plot laid along a member: a hump over a line, with the strokes that tie it down.
   diagram: `<path d="M2.500 15h15"/><path d="M4 15c1.500-8 10.500-8 12 0"/><path d="M7 15v-4.500M10 15v-6M13 15v-4.500" stroke-width="1.1"/>`,
