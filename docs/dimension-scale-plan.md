@@ -1,6 +1,6 @@
 # Relative dimensions and fitted export: plan
 
-Status: agreed in a workshop and tried out in a demo; **not built into the app yet**.
+Status: agreed in a workshop, tried out in a demo, and **built into the beta** (branch `next`, 28 October 2026). Not in the released app yet.
 The demo is [`demos/dimension-scale-demo.html`](demos/dimension-scale-demo.html). Open it in a browser; it needs nothing else.
 
 ## What changes
@@ -26,9 +26,9 @@ The figure width box in the lower-right corner of the app sets the exported widt
 - **Dimension values don't affect print size.** A drawing dimensioned in kilometres and one in mm print at the same size if they look the same.
 - **Export preview.** Show the page at its paper size, with the margin dashed and the size printed under it (as in the demo, key P).
 
-### Known limitation
+### Short dimensions
 
-At small widths (around 3 cm), short dimensions get crowded and the arrowheads run into the number. The app needs to flip the arrows outside the extension lines, and possibly move the text, when the dimension line is shorter than text + 2 arrows.
+At small widths (around 3 cm), short dimensions got crowded. Built: when the dimension line is shorter than two arrowheads and a little room, the arrowheads point in from outside the extension lines; when the number is wider than the room between the extension lines, it goes past the second one, in line with the dimension line.
 
 ## Implementation notes for the app
 
@@ -55,10 +55,18 @@ At small widths (around 3 cm), short dimensions get crowded and the arrowheads r
 
 **Unchanged:** sizes already in model units (load scales, hatch spacing, spring/damper looks, balloon offsets, diagram heights). The geometry doesn't move when the scale is set, so these stay put.
 
+## As built
+
+- The scale lives in `Sketch.lengthScale`; `settleLengthScale` (prims.ts) keeps it in step on every commit, and `unitScale(sk)` reads it (1 when unset).
+- Typing the only length dimension renames the scale and shows a toast: "The first dimension sets the scale, so nothing moves."
+- Measures, etalons (their default label and length), point coordinates, the cursor readout and every "in the drawing's units" field in the side panel are shown times the scale.
+- `fitFigure(sk)` (export.ts) does the fit with a secant iteration on the figure's width; a figure much taller than wide is still held to about three times its width, centred on its page. SVG and TikZ both come out exactly the set width (TikZ via `\useasboundingbox`, ending in `%` so no stray space widens it).
+- The print preview (Q) shows the page on the desk, with the margin dashed and its size written under it.
+
 ## Still open
 
 - Whether to add an optional height limit (fit inside width × height instead of width only).
 - Whether to offer "Lock scale", so the first dimension can never move anything again.
-- The scale readout: where it goes, and whether the user can type it directly.
+- The scale readout: where it goes, and whether the user can type it directly. (Not built: the toast explains the first dimension.)
 - A units label (mm, m) next to dimension values, or bare numbers as now.
 - Whether hidden dimensions (still driving, not printed) should be able to set the scale. They probably should; they're still length dimensions.

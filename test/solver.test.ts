@@ -322,6 +322,7 @@ describe("model", () => {
 
   it("round-trips through JSON", () => {
     const { sk } = triangle(4, 3);
+    sk.lengthScale = 2.5;
     expect(deserialize(serialize(sk))).toEqual(sk);
     expect(() => deserialize('{"hello":1}')).toThrow();
   });

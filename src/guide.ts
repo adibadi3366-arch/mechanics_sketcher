@@ -31,7 +31,7 @@ export const TIPS: Record<string, Tip> = {
   tangent: { title: "Tangent", body: "Click a line and a circle or arc to make the line touch it, or two circles or arcs to make them touch each other." + CONSTRAINT },
   fixed: { title: "Fix point", body: "Click a point to pin it where it is. Click a fixed point again to release it. Blue geometry can still move; it turns black once it is fully constrained." },
 
-  dimension: { title: "Dimension", body: "Click a line, two points, two lines or a circle. Then middle-click, or click empty space, where the dimension should go and type its value: the drawing follows the number. Type text such as 2a to show a label in its place." },
+  dimension: { title: "Dimension", body: "Click a line, two points, two lines or a circle. Then middle-click, or click empty space, where the dimension should go and type its value. The first length dimension only sets the scale: the line keeps its size and is worth what you typed. Every later one is measured against it, and the drawing follows the number. Type text such as 2a to show a label in its place." },
   pin: { title: "Pin support", body: SUPPORT },
   roller: { title: "Roller support", body: SUPPORT },
   wall: { title: "Fixed support", body: SUPPORT },
@@ -60,8 +60,8 @@ export const TIPS: Record<string, Tip> = {
   construction: { title: "Construction", body: "While this is on, the lines, circles and arcs you draw are construction lines: dashed here, and left out of the print and the exported figure. They take constraints and dimensions like anything else. Press it again to draw the figure itself." },
 
   plot: { title: "Plot", body: "A workspace of its own, for plotting functions. Type a formula of x in the side panel, such as 2x + 1 or sin(x); a function can have several pieces, each over its own stretch of the axis. Parametric adds a curve given by x(t) and y(t), such as a circle. Note and Balloon put text on the plot. On the left, the graph: drag and the wheel move around and zoom, and the dashed frame is the range that is exported; drag its handles or its edge to change it. On the right, the print: the plot as it is exported, where its handles set its size on paper. Flip axes turns it so the variable runs up and the values across. The ends of the axes take LaTeX, such as 2\\pi or \\frac{\\pi}{2}. Export saves the plot on show, as SVG or for pgfplots." },
-  preview: { title: "Print preview", body: "This is the figure as it is exported: no helper lines, markers or grid, and text at its size in print. Press Q again to go back to editing." },
-  export: { title: "Export", body: "SVG saves a picture file. TikZ saves a .tex file to \\input in LaTeX, and Copy TikZ puts the same text on the clipboard. How wide the figure is, and how large its text, is set in the box in the corner." },
+  preview: { title: "Print preview", body: "This is the figure as it is exported, on its page: no helper lines, markers or grid, and text at its size in print. Everything in it is fitted to the figure width, with 5 % of it as a margin on every side; the dashed line marks the margin. Press Q again to go back to editing." },
+  export: { title: "Export", body: "SVG saves a picture file. TikZ saves a .tex file to \\input in LaTeX, and Copy TikZ puts the same text on the clipboard. How wide the figure is, everything in it with a margin round it, and how large its text, is set in the box in the corner." },
 };
 
 const WELCOME_KEY = "mech-sketch.welcome";

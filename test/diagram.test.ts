@@ -7,7 +7,7 @@ import { baseline, beamAxis, diagramShape, plotPeak, plotOf, traceShape, traceRe
 import { straightBeam, curvedBeam } from "../src/beam";
 import { buildPrims, valueText, tint, type Prim } from "../src/prims";
 import { PLOT } from "../src/plot";
-import { toSvg, toTikz } from "../src/export";
+import { toSvg, toTikz } from "./layout";
 
 const RED = "#d32f2f";
 /** A sketch with a line from (0, 0) to (10, 0) and a plot of x from 0 to 5 with the given formulas as one function. */

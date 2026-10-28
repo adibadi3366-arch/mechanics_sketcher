@@ -5,7 +5,7 @@ import {
 } from "../src/model";
 import { elementPaths, elementLength, elementReach, springTurns, spiralTurns, lookOf, defaultLook, TURNS_MAX } from "../src/element";
 import { buildPrims, standardWeight, DASHED, PAPER, type Prim } from "../src/prims";
-import { toSvg, toTikz } from "../src/export";
+import { toSvg, toTikz } from "./layout";
 import { mirrorCopy, linearCopy } from "../src/pattern";
 
 /** A line from (0, 0) to (len, 0) drawn as an element. */

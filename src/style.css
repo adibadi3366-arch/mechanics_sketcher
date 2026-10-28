@@ -219,6 +219,11 @@ text.tex { fill: currentColor; font-family: var(--math); }
 .region.sel { stroke: var(--sel); stroke-width: 2; stroke-dasharray: 6 4; }
 /* Print preview: a plain sheet, and handles on what is selected. */
 .sheet { fill: var(--paper); }
+/* With the page on it, the print preview is a page on the desk, as on the Plot tab. */
+.sheet.desk { fill: var(--board-lo); }
+.page { fill: var(--paper); filter: drop-shadow(0 1px 3px rgba(0, 0, 0, 0.22)); }
+.page-margin { fill: none; stroke: #9aa59d; stroke-width: 1; stroke-dasharray: 5 4; }
+.page-size { font: 12px system-ui, -apple-system, "Segoe UI", sans-serif; fill: var(--ink-2); pointer-events: none; }
 .grip { fill: var(--paper); stroke: var(--sel); stroke-width: 1.6; cursor: grab; }
 .overlap { fill: none; stroke: var(--bad); stroke-width: 4; stroke-linecap: round; opacity: 0.85; }
 

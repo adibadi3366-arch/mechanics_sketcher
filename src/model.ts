@@ -526,7 +526,7 @@ export interface Sketch {
   entities: Entity[];
   constraints: Constraint[];
   symbols: Sym[];
-  /** Width of the drawn geometry in the exported figure, in mm. */
+  /** Width of the exported figure, in mm: everything in it, with a margin all round. */
   figureWidthMm: number;
   /** How large annotations are in the exported figure: 1 gives 10 pt text, 2 twice that. */
   dimScale: number;
@@ -542,6 +542,13 @@ export interface Sketch {
   supportScale?: number;
   /** The plots kept with the sketch. */
   plots?: Plot[];
+  /**
+   * What one unit of the drawing is worth in the units lengths are dimensioned
+   * in. The first length dimension sets it, so it moves nothing: it only says
+   * what the line it is on measures. Every later one is measured against it.
+   * Unset while there is no length dimension.
+   */
+  lengthScale?: number;
 }
 
 // ---- plots ------------------------------------------------------------------
@@ -647,6 +654,14 @@ export function emptySketch(): Sketch {
 
 export function isDimension(c: Constraint): c is Dimension {
   return c.type === "distance" || c.type === "angle" || c.type === "radius";
+}
+/** A dimension that drives a length: a distance or a radius, and not a measure. These are the ones that set the scale. */
+export function isLengthDimension(c: Constraint): c is DistanceDim | RadiusDim {
+  return (c.type === "distance" || c.type === "radius") && !c.measure;
+}
+/** What one unit of the drawing is worth in the units lengths are dimensioned in: 1 until the first length dimension sets it. */
+export function unitScale(sk: Pick<Sketch, "lengthScale">): number {
+  return sk.lengthScale !== undefined && sk.lengthScale > 0 && Number.isFinite(sk.lengthScale) ? sk.lengthScale : 1;
 }
 export function isLink(c: Constraint): c is Link {
   return c.type === "mirror" || c.type === "shift" || c.type === "turn";
@@ -1002,7 +1017,8 @@ export function deserialize(text: string): Sketch {
   // Files from before the origin existed get one.
   const entities = raw.entities.some((e) => e.id === ORIGIN) ? raw.entities : [originPoint(), ...raw.entities];
   if (raw.version === 1) {
-    return { version: 4, nextId: raw.nextId ?? 1, entities, ...upgradeV1(raw, entities), dimScale: 1, showOrigin: raw.showOrigin ?? true };
+    const v1 = upgradeV1(raw, entities);
+    return { version: 4, nextId: raw.nextId ?? 1, entities, ...v1, dimScale: 1, showOrigin: raw.showOrigin ?? true, ...(v1.constraints.some(isLengthDimension) ? { lengthScale: 1 } : {}) };
   }
   const figureWidthMm = raw.figureWidthMm && raw.figureWidthMm > 0 ? raw.figureWidthMm : 80;
   const dimScale = raw.dimScale && raw.dimScale > 0 ? raw.dimScale : 1;
@@ -1013,6 +1029,9 @@ export function deserialize(text: string): Sketch {
     symbols = sizesToModel(symbols, extent > 1e-9 ? figureWidthMm / dimScale / extent : 10, { axes: raw.version === 2 });
   }
   const plots = Array.isArray(raw.plots) ? raw.plots.filter(isPlot) : [];
+  // Files from before the scale existed dimension in the drawing's own units.
+  const scaled = typeof raw.lengthScale === "number" && raw.lengthScale > 0 && Number.isFinite(raw.lengthScale);
+  const lengthScale = raw.constraints.some(isLengthDimension) ? (scaled ? raw.lengthScale! : 1) : undefined;
   // A diagram is a plot laid along a member: without its plot there is nothing to lay.
   symbols = symbols.filter((s) => (s.type !== "diagram" && s.type !== "trace") || plots.some((p) => p.id === s.plot));
   return {
@@ -1027,6 +1046,7 @@ export function deserialize(text: string): Sketch {
     ...(raw.loadScale && typeof raw.loadScale === "object" ? { loadScale: raw.loadScale } : {}),
     ...(typeof raw.supportScale === "number" && raw.supportScale > 0 ? { supportScale: raw.supportScale } : {}),
     ...(plots.length ? { plots } : {}),
+    ...(lengthScale !== undefined ? { lengthScale } : {}),
   };
 }
 

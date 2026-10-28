@@ -2,7 +2,7 @@
 // the screen draws from, in paper millimetres, so what is exported is what was
 // on screen without the editing aids.
 
-import type { Sketch } from "./model";
+import { type Sketch, geometryExtent } from "./model";
 import {
   type Prim, type StrokeStyle, type Outline, type Anchor, type LinePrim, type ArcPrim,
   PAPER, PT_MM, STROKE_DASH, dashOf, strokeWidth, printMm, buildPrims, arrowHeads, strokedEnds, strokedSweep, textBox, textCorners, outlinePolygon,
@@ -18,7 +18,70 @@ import { outlinePath } from "./render";
  * its size on paper.
  */
 export function figurePrims(sk: Sketch): Prim[] {
-  return buildPrims(sk, printMm(sk), { editor: false });
+  return fitFigure(sk)?.prims ?? [];
+}
+
+/** The margin round the exported figure on each side, as a share of its width. */
+export const FIGURE_MARGIN = 0.05;
+
+/** The figure fitted to its page. Lengths are in annotation mm: enlarged by the dimension size they are on paper. */
+export interface FittedFigure {
+  /** Annotation mm per unit of the drawing. */
+  mm: number;
+  prims: Prim[];
+  /** What the primitives cover. */
+  box: Box;
+  /** The page: the figure with the margin all round, as wide as the set width. */
+  page: Box;
+  margin: number;
+  /** Size of the page on paper, in mm. */
+  width: number;
+  height: number;
+}
+
+/**
+ * Lays the figure out to fill the set width: everything in it, dimensions,
+ * text and symbols included, takes 90 % of the width, with 5 % of it as a
+ * margin on every side; the height follows. Only the drawing is scaled: text,
+ * arrowheads and line widths keep their size on paper, so the scale is found
+ * in a few rounds rather than worked out at once. A figure much taller than
+ * it is wide is held to a height of about three times its width, as before.
+ * Null when there is nothing to export.
+ */
+export function fitFigure(sk: Sketch): FittedFigure | null {
+  const k = sk.dimScale > 0 ? sk.dimScale : 1;
+  const W = sk.figureWidthMm / k;
+  const margin = W * FIGURE_MARGIN, inner = W - 2 * margin;
+  const extent = geometryExtent(sk);
+  const at = (mm: number) => {
+    const prims = buildPrims(sk, mm, { editor: false });
+    const box = figureBounds(prims);
+    const size = boxIsEmpty(box) ? 0 : Math.max(box.x1 - box.x0, (box.y1 - box.y0) * 0.3);
+    return { mm, prims, box, size };
+  };
+  let cur = at(extent > 1e-9 ? inner / extent : printMm(sk));
+  if (boxIsEmpty(cur.box)) return null;
+  if (extent > 1e-9) {
+    // Each round takes the change in size from the last one as how fast the figure grows with the scale.
+    let slope = extent, best = cur.size <= inner ? cur : null;
+    for (let i = 0; i < 24 && Math.abs(cur.size - inner) > inner * 1e-5; i++) {
+      let next = cur.mm + (inner - cur.size) / slope;
+      // Text and symbols alone may be wider than the page: the drawing then only shrinks so far.
+      if (!(next > cur.mm * 0.05)) next = cur.mm * 0.05;
+      const tried = at(next);
+      const grew = (tried.size - cur.size) / (tried.mm - cur.mm);
+      if (Number.isFinite(grew) && grew > extent * 1e-3) slope = grew;
+      cur = tried;
+      if (cur.size <= inner * (1 + 1e-5) && (!best || cur.mm > best.mm)) best = cur;
+    }
+    if (cur.size > inner * (1 + 1e-5) && best) cur = best;
+  }
+  const { box } = cur;
+  // Narrower than the page (a tall figure): it sits in the middle of it.
+  const w = Math.max(box.x1 - box.x0 + 2 * margin, W);
+  const cx = (box.x0 + box.x1) / 2;
+  const page: Box = { x0: cx - w / 2, x1: cx + w / 2, y0: box.y0 - margin, y1: box.y1 + margin };
+  return { mm: cur.mm, prims: cur.prims, box, page, margin, width: w * k, height: (page.y1 - page.y0) * k };
 }
 
 /** Everything the primitives cover, in paper mm. */
@@ -60,17 +123,23 @@ export const num = (v: number, digits = 3): string => {
  * Sizes are in millimetres; labels are outlines, so no font is needed to show it.
  */
 export function toSvg(sk: Sketch): string | null {
-  return primsToSvg(figurePrims(sk), sk.dimScale);
+  const fig = fitFigure(sk);
+  return fig && primsToSvg(fig.prims, sk.dimScale, fig.page);
 }
 
-/** The same for any list of primitives in annotation mm, enlarged `k` times on paper. */
-export function primsToSvg(prims: Prim[], k = 1): string | null {
+/**
+ * The same for any list of primitives in annotation mm, enlarged `k` times on
+ * paper. `page` is the area the file shows; unset, what the primitives cover
+ * with 1 mm round it.
+ */
+export function primsToSvg(prims: Prim[], k = 1, page?: Box): string | null {
   const box = figureBounds(prims);
   if (boxIsEmpty(box)) return null;
   const margin = 1 / k; // 1 mm on paper
-  const w = box.x1 - box.x0 + 2 * margin, h = box.y1 - box.y0 + 2 * margin;
-  // SVG's y axis points down: flip, and put the top-left corner of the figure at the origin.
-  const M = ([x, y]: V): V => [x - box.x0 + margin, box.y1 - y + margin];
+  const frame: Box = page ?? { x0: box.x0 - margin, y0: box.y0 - margin, x1: box.x1 + margin, y1: box.y1 + margin };
+  const w = frame.x1 - frame.x0, h = frame.y1 - frame.y0;
+  // SVG's y axis points down: flip, and put the top-left corner of the page at the origin.
+  const M = ([x, y]: V): V => [x - frame.x0, frame.y1 - y];
   const pt = (q: V) => { const m = M(q); return `${num(m[0])},${num(m[1])}`; };
   const engine = texEngine();
 
@@ -190,13 +259,19 @@ function tips(p: LinePrim | ArcPrim, k: number): string {
  * they come out in the document's own font.
  */
 export function toTikz(sk: Sketch): string | null {
-  return primsToTikz(figurePrims(sk), sk.dimScale);
+  const fig = fitFigure(sk);
+  return fig && primsToTikz(fig.prims, sk.dimScale, fig.page);
 }
 
-/** The same for any list of primitives in annotation mm, enlarged `k` times on paper. */
-export function primsToTikz(prims: Prim[], k = 1): string | null {
+/**
+ * The same for any list of primitives in annotation mm, enlarged `k` times on
+ * paper. With `page`, the picture is exactly that size: LaTeX sets the text
+ * itself, so its own measure of the picture could come out a little different.
+ */
+export function primsToTikz(prims: Prim[], k = 1, page?: Box): string | null {
   if (!prims.length) return null;
   const { styles, lines, needArrows, bentTip } = tikzParts(prims, k);
+  if (page) lines.unshift(`  \\useasboundingbox ${co([page.x0, page.y0])} rectangle ${co([page.x1, page.y1])};`);
   // At another dimension size the whole picture is enlarged: the unit, the
   // widths and tips above, and the text, which TikZ scales node by node.
   const unit = `${num(k, 3)}mm`;
@@ -205,7 +280,8 @@ export function primsToTikz(prims: Prim[], k = 1): string | null {
     `% Made with Mech Sketch. Needs \\usepackage{tikz}${needArrows ? ` and \\usetikzlibrary{arrows.meta${bentTip ? ", bending" : ""}}` : ""}.\n` +
     `\\begin{tikzpicture}[x=${unit}, y=${unit}, line cap=round, line join=round,\n  ${styles.join(",\n  ")}]\n` +
     lines.join("\n") +
-    `\n\\end{tikzpicture}\n`
+    // Held to its page, it ends in %, so the end of the line does not become a space that makes it wider.
+    `\n\\end{tikzpicture}${page ? "%" : ""}\n`
   );
 }
 

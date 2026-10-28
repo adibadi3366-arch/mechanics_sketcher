@@ -3,7 +3,7 @@
 import { GcsWrapper, SolveStatus, DebugMode, type SketchPrimitive } from "@salusoft89/planegcs";
 import {
   type Sketch, type Id, type Constraint, type Entity, type Link, type HalfPair,
-  ORIGIN, entity, point, isFixed, arcRadius,
+  ORIGIN, entity, point, isFixed, arcRadius, unitScale,
 } from "./model";
 import { type V, sub, dot, cross, norm, perp } from "./geom";
 
@@ -180,6 +180,8 @@ function linkPrims(sk: Sketch, c: Link, params: FreeParam[]): Prim[] {
  */
 function constraintPrims(sk: Sketch, c: Constraint, params: FreeParam[]): Prim[] {
   const id = c.id;
+  // Lengths are dimensioned in the sketch's units; the geometry is in its own.
+  const length = (v: number) => v / unitScale(sk);
   // A measure reads the geometry and holds nothing.
   if ((c.type === "distance" || c.type === "angle" || c.type === "radius") && c.measure) return [];
   switch (c.type) {
@@ -242,7 +244,7 @@ function constraintPrims(sk: Sketch, c: Constraint, params: FreeParam[]): Prim[]
     }
     case "distance": {
       if (c.mode === "aligned") {
-        return [{ id, type: "p2p_distance", p1_id: c.a, p2_id: c.b, distance: c.value }];
+        return [{ id, type: "p2p_distance", p1_id: c.a, p2_id: c.b, distance: length(c.value) }];
       }
       // Horizontal and vertical distances are signed differences. The sign
       // follows the current layout so the points keep their order.
@@ -252,7 +254,7 @@ function constraintPrims(sk: Sketch, c: Constraint, params: FreeParam[]): Prim[]
       return [{
         id, type: "difference",
         param1: { o_id: c.a, prop }, param2: { o_id: c.b, prop },
-        difference: sign * c.value,
+        difference: sign * length(c.value),
       }];
     }
     case "angle": {
@@ -267,8 +269,8 @@ function constraintPrims(sk: Sketch, c: Constraint, params: FreeParam[]): Prim[]
     }
     case "radius": {
       const k = kindOf(sk, c.target);
-      if (k === "circle") return [{ id, type: "circle_radius", c_id: c.target, radius: c.value }];
-      return [{ id, type: "arc_radius", a_id: c.target, radius: c.value }];
+      if (k === "circle") return [{ id, type: "circle_radius", c_id: c.target, radius: length(c.value) }];
+      return [{ id, type: "arc_radius", a_id: c.target, radius: length(c.value) }];
     }
   }
 }

@@ -3,7 +3,7 @@ import {
   emptySketch, addPoint, addLine, addConstraint, addSymbol, serialize, deserialize, point, type Sketch, type Line, type Load, type Moment, type LineLoad,
 } from "../src/model";
 import { buildPrims, loadArrow, lineLoadFrame, momentArc, loadLabel, loadReach, tint, PAPER, type Prim } from "../src/prims";
-import { toSvg, toTikz } from "../src/export";
+import { toSvg, toTikz } from "./layout";
 import { mirrorCopy } from "../src/pattern";
 
 /** A beam from (0, 0) to (10, 0), with forces drawn 2 units long per unit of magnitude. */

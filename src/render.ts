@@ -4,7 +4,7 @@
 import {
   type Sketch, type Id, type Constraint, type Curve, ORIGIN, entity, point, isDimension, arcRadius, isFixed,
 } from "./model";
-import { type V, add, sub, mul, norm, perp, mid, polar, wrap, projectOnSegment, TWO_PI } from "./geom";
+import { type V, type Box, add, sub, mul, norm, perp, mid, polar, wrap, projectOnSegment, TWO_PI } from "./geom";
 import { type Prim, type StrokeStyle, type Outline, PAPER, dashOf, strokeWidth, arrowHeads, strokedEnds, strokedSweep, textBox } from "./prims";
 import type { Overlaps } from "./regions";
 import { texEngine } from "./tex";
@@ -72,6 +72,8 @@ export interface Scene {
   grips: V[];
   /** Print preview: only what is exported is drawn, with no grid, handles or markers. */
   plain: boolean;
+  /** In the print preview, the page the figure is exported on and the margin inside it, in annotation mm, and what to write under it. */
+  page?: { page: Box; inner: Box; caption: string } | null;
 }
 
 export const GLYPH_SIZE = 18;
@@ -200,7 +202,7 @@ function gridStep(scale: number): number {
 }
 
 function background(view: View, showOrigin: boolean, plain: boolean): string {
-  if (plain) return `<rect class="sheet" width="${view.w}" height="${view.h}"/>`;
+  if (plain) return `<rect class="sheet desk" width="${view.w}" height="${view.h}"/>`;
   const step = gridStep(view.scale) * view.scale;
   const o = toScreen(view, [0, 0]);
   const ox = ((o[0] % step) + step) % step - step / 2;
@@ -453,12 +455,25 @@ function drawSnap(s: Scene): string {
   return out;
 }
 
+/** The page of the print preview: white, with the margin dashed inside it and its size written under it. */
+function drawPage(s: Scene): string {
+  const p = s.page;
+  if (!p) return "";
+  const rect = (b: Box, cls: string) => {
+    const a = toScreen(s.view, [b.x0 / s.mm, b.y1 / s.mm]), c = toScreen(s.view, [b.x1 / s.mm, b.y0 / s.mm]);
+    return { x: a[0], y: a[1], w: c[0] - a[0], h: c[1] - a[1], svg: `<rect class="${cls}" x="${n2(a[0])}" y="${n2(a[1])}" width="${n2(c[0] - a[0])}" height="${n2(c[1] - a[1])}"/>` };
+  };
+  const page = rect(p.page, "page"), inner = rect(p.inner, "page-margin");
+  return page.svg + inner.svg +
+    `<text class="page-size" x="${n2(page.x + page.w / 2)}" y="${n2(Math.min(s.view.h - 8, page.y + page.h + 20))}" text-anchor="middle">${p.caption}</text>`;
+}
+
 export function renderScene(s: Scene): string {
   let box = "";
   if (s.box) {
     const x = Math.min(s.box.a[0], s.box.b[0]), y = Math.min(s.box.a[1], s.box.b[1]);
     box = `<rect class="marquee" x="${n2(x)}" y="${n2(y)}" width="${n2(Math.abs(s.box.a[0] - s.box.b[0]))}" height="${n2(Math.abs(s.box.a[1] - s.box.b[1]))}"/>`;
   }
-  if (s.plain) return background(s.view, false, true) + drawPrims(s) + drawGrips(s) + drawPreview(s) + drawSnap(s) + box;
+  if (s.plain) return background(s.view, false, true) + drawPage(s) + drawPrims(s) + drawGrips(s) + drawPreview(s) + drawSnap(s) + box;
   return background(s.view, s.sk.showOrigin, false) + drawPrims(s) + drawOverlaps(s) + drawHandles(s) + drawGlyphs(s) + drawGrips(s) + drawPreview(s) + drawSnap(s) + box;
 }

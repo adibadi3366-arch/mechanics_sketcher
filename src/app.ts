@@ -7,18 +7,18 @@ import {
   type ArrowEnds, type Datum, type BalloonFrame, type AnyLoad, type LoadKind, type Diagram, type Plot, isLoad, loadKind, geometryExtent,
   type LineElement, type ElementLook, isNamed,
   ORIGIN, emptySketch, entity, point, constraint, symbol, symbolRefs, points, curves, curvePoints,
-  constraintRefs, isDimension, isLink, isFixed, arcRadius, addPoint, addLine, addCircle, addArc, addConstraint,
+  constraintRefs, isDimension, isLengthDimension, unitScale, isLink, isFixed, arcRadius, addPoint, addLine, addCircle, addArc, addConstraint,
   addSupport, addFrame, addSymbol, remove, serialize, deserialize, clone,
 } from "./model";
 import { SketchSolver, type Drag, type SolveResult, type Freedom } from "./solver";
 import { History } from "./history";
 import {
   type V, add, sub, mul, dot, cross, norm, perp, mid, dist, angleOf, polar, wrap, inSweep,
-  projectOnSegment, intersectLines, boxIsEmpty, grow, TWO_PI,
+  type Box, projectOnSegment, intersectLines, boxIsEmpty, grow, TWO_PI,
 } from "./geom";
 import {
   type Prim, PAPER, printMm, geometryBox, buildPrims, dimensionPrims,
-  primDistance, textCentre, distanceFrame, angleFrame, roundFrame, symbolPosition, balloonAnchor, measuredValue,
+  primDistance, textCentre, distanceFrame, angleFrame, roundFrame, symbolPosition, balloonAnchor, measuredValue, measuredDimValue, settleLengthScale,
   curveParam, sideOfCurve, formatNumber, frameTips, arrowLabelAt, arrowAnchor, centerMarkEnds, etalonEnds, rightAngleFrame,
   centerMarkDashes, curveLength, hatchCount, standardWeight, loadScaleOf, loadLabel, loadReach, lineLoadFrame,
 } from "./prims";
@@ -29,7 +29,7 @@ import {
 import { regionAt, findOverlaps } from "./regions";
 import { type TrimPlan, planTrim, applyTrim, strokeHits } from "./trim";
 import { type CopyResult, PATTERN_MAX, mirrorCopy, linearCopy, circularCopy, nextDatumName } from "./pattern";
-import { toSvg, toTikz } from "./export";
+import { type FittedFigure, FIGURE_MARGIN, toSvg, toTikz, fitFigure } from "./export";
 import { icon } from "./icons";
 import { showTexFields } from "./texfield";
 import { BETA, EXPORT_WAIT_SECONDS, NEWS_ID, REPORT_EMAIL, SUPPORT_URL } from "./config";
@@ -375,6 +375,8 @@ export class App {
   private editScale = 1;
   /** The view to go back to when the print preview is left. */
   private viewBeforePreview: View | null = null;
+  /** In the print preview: the figure as it is exported, fitted to its page. Laid out afresh for every frame. */
+  private fig: FittedFigure | null = null;
   /** File name, without extension, offered for the next export. */
   private exportName = "figure";
   /** File name, without extension, offered when the sketch is saved. */
@@ -587,7 +589,22 @@ export class App {
    * the print preview it is the scale of the exported figure.
    */
   private mm(): number {
-    return this.preview ? printMm(this.sk) : this.view.scale / (EDIT_PX_PER_MM * this.editScale);
+    return this.preview ? this.printScale() : this.view.scale / (EDIT_PX_PER_MM * this.editScale);
+  }
+
+  /** Annotation mm per model unit in the exported figure, as the print preview last laid it out. */
+  private printScale(): number {
+    return this.preview && this.fig ? this.fig.mm : printMm(this.sk);
+  }
+
+  /** A length of the drawing as the panel shows it: in the units the sketch is dimensioned in. */
+  private inUnits(v: number, digits = 4): string {
+    return formatNumber(Number((v * unitScale(this.sk)).toPrecision(digits)));
+  }
+
+  /** A length typed in the units the sketch is dimensioned in, in the drawing's own. */
+  private fromUnits(v: number): number {
+    return v / unitScale(this.sk);
   }
 
   private solve(drags: Drag[] = []): SolveResult {
@@ -598,6 +615,7 @@ export class App {
   /** Records the current sketch as an undo step and saves it. */
   private commit(): void {
     this.freedomStale = true;
+    settleLengthScale(this.sk);
     this.history.commit(this.sk);
     this.autosave();
     this.touch();
@@ -677,8 +695,9 @@ export class App {
 
   private draw(): void {
     if (this.tab === "plot") return this.drawPlot();
+    this.fig = this.preview ? fitFigure(this.sk) : null;
     const mm = this.mm();
-    this.prims = buildPrims(this.sk, mm, { editor: !this.preview });
+    this.prims = this.fig ? this.fig.prims : buildPrims(this.sk, mm, { editor: !this.preview });
     this.glyphs = this.preview ? [] : layoutGlyphs(this.sk, this.view, this.glyphFilter());
 
     const related = new Set<Id>();
@@ -695,7 +714,7 @@ export class App {
       freeIds: this.preview ? new Set() : this.freeIds(), overlaps: findOverlaps(this.sk),
       preview: this.previewShapes(), snap: this.snapMark,
       box: this.drag?.kind === "box" ? { a: this.drag.a, b: this.drag.b } : null,
-      grips: this.grips(mm), plain: this.preview,
+      grips: this.grips(mm), plain: this.preview, page: this.pageMark(),
     });
 
     this.emptyEl.hidden = !this.isBlank() || this.pending !== null || this.tool !== "select";
@@ -704,8 +723,8 @@ export class App {
     this.svg.classList.toggle("over", this.tool === "select" && this.hover !== null && !this.drag);
 
     const m = toModel(this.view, this.cursor);
-    this.coordsEl.textContent = `x ${formatNumber(m[0])}   y ${formatNumber(m[1])}`;
-    this.hintEl.textContent = this.hintOverride ?? (this.preview ? "Print preview: only what is exported is shown. Press Q to go back to editing." : this.toolHint());
+    this.coordsEl.textContent = `x ${this.inUnits(m[0], 6)}   y ${this.inUnits(m[1], 6)}`;
+    this.hintEl.textContent = this.hintOverride ?? (this.preview ? "Print preview: the figure as it is exported, fitted to the figure width with a margin all round. Press Q to go back to editing." : this.toolHint());
 
     if (this.chromeDirty) {
       this.chromeDirty = false;
@@ -714,6 +733,22 @@ export class App {
       this.updateButtons();
     }
     if (this.editing) this.placeEditor();
+  }
+
+  /** The page the print preview shows the figure on: its size on paper, and the margin round it. */
+  private pageMark(): { page: Box; inner: Box; caption: string } | null {
+    const fig = this.fig;
+    if (!fig) return null;
+    const mm = fig.mm, k = this.sk.dimScale > 0 ? this.sk.dimScale : 1;
+    const shown = (v: number) => formatNumber(Number(v.toFixed(1)));
+    const times = this.view.scale / mm / k / (96 / 25.4);
+    const at = Math.abs(times - 1) > 0.05 ? (times > 1 ? `shown ${times.toFixed(1)}× enlarged` : `shown at ${Math.round(times * 100)} %`) : "actual size";
+    const m = fig.margin;
+    return {
+      page: fig.page,
+      inner: { x0: fig.page.x0 + m, y0: fig.page.y0 + m, x1: fig.page.x1 - m, y1: fig.page.y1 - m },
+      caption: `${shown(fig.width / 10)} × ${shown(fig.height / 10)} cm · ${at} · dashed: the ${Math.round(FIGURE_MARGIN * 100)} % margin`,
+    };
   }
 
   /** The same for the Plot workspace, which draws its own canvas and panel. */
@@ -1643,7 +1678,7 @@ export class App {
     const length = elementLength(this.sk, e);
     const like = curves(this.sk).find((c): c is Line | Arc => c !== e && c.type !== "circle" && c.element === e.element && !!c.look);
     // Sized for the figure as it prints, where it stands beside the supports and the arrowheads; a long one is a little wider.
-    const look: ElementLook = like?.look ? { across: like.look.across, pitch: like.look.pitch } : defaultLook(Math.max(ELEMENT_ACROSS / printMm(this.sk), length / 14));
+    const look: ElementLook = like?.look ? { across: like.look.across, pitch: like.look.pitch } : defaultLook(Math.max(ELEMENT_ACROSS / this.printScale(), length / 14));
     if (like?.look?.coil) look.coil = true;
     if (length > 0) {
       const most = length * (e.element === "damper" ? 0.5 : 0.6);
@@ -1669,7 +1704,7 @@ export class App {
     if (tool === "frame") {
       const snap = this.snapAt(sp);
       // A handy length on screen to start with; from then on it belongs to the drawing.
-      const size = this.preview ? 10 / printMm(this.sk) : 56 / this.view.scale;
+      const size = this.preview ? 10 / this.printScale() : 56 / this.view.scale;
       const f = addFrame(this.sk, snap.pos[0], snap.pos[1], snap.pointId, size);
       this.commit();
       this.setTool("select");
@@ -1678,9 +1713,10 @@ export class App {
     }
 
     if (tool === "etalon") {
-      // As long as a round number of the drawing's units that comes out at about 2 cm in print.
+      // As long as a round number, in the units the sketch is dimensioned in, that comes out at about 2 cm in print.
       const snap = this.snapAt(sp);
-      const e = addSymbol(this.sk, { type: "etalon", x: snap.pos[0], y: snap.pos[1], angle: 0, length: roundNumber(ETALON_MM / printMm(this.sk)), label: "" });
+      const length = this.fromUnits(roundNumber((ETALON_MM / this.printScale()) * unitScale(this.sk)));
+      const e = addSymbol(this.sk, { type: "etalon", x: snap.pos[0], y: snap.pos[1], angle: 0, length, label: "" });
       this.commit();
       this.setTool("select");
       this.selection = new Set([e.id]);
@@ -1902,7 +1938,7 @@ export class App {
    */
   private startLoadScale(kind: LoadKind): void {
     if (this.sk.loadScale?.[kind]) return;
-    const perPx = this.preview ? EDIT_PX_PER_MM / printMm(this.sk) : 1 / this.view.scale;
+    const perPx = this.preview ? EDIT_PX_PER_MM / this.printScale() : 1 / this.view.scale;
     this.sk.loadScale = { ...this.sk.loadScale, [kind]: LOAD_START[kind] * perPx };
   }
 
@@ -1968,7 +2004,7 @@ export class App {
   /** How a diagram's height is shown beside its slider: that of its largest value, in the drawing's units. */
   private diagramHeightLabel(s: Diagram): string {
     const peak = diagramShape(this.sk, s)?.peak;
-    return peak ? formatNumber(Number((Math.abs(peak.v) * s.scale).toPrecision(3))) : "–";
+    return peak ? this.inUnits(Math.abs(peak.v) * s.scale, 3) : "–";
   }
 
   /** Opens the plot of a diagram in the Plot workspace. */
@@ -2136,9 +2172,10 @@ export class App {
       s.angle = angleOf(v);
       return;
     }
-    // Two figures are kept, so the length is a number to write on it.
-    const step = 10 ** (Math.floor(Math.log10(length)) - 1);
-    s.length = Number((Math.round(length / step) * step).toPrecision(12));
+    // Two figures are kept, so the length is a number to write on it, in the units the sketch is dimensioned in.
+    const worth = length * unitScale(this.sk);
+    const step = 10 ** (Math.floor(Math.log10(worth)) - 1);
+    s.length = this.fromUnits(Number((Math.round(worth / step) * step).toPrecision(12)));
     s.angle = wrap(Math.round(angleOf(v) / (15 * DEG)) * 15 * DEG);
   }
 
@@ -2646,6 +2683,14 @@ export class App {
    * spot outside the figure.
    */
   private dimensionDraft(at?: V): ConstraintDraft | string {
+    const draft = this.drawnDimension(at);
+    // Lengths are given in the units the sketch is dimensioned in.
+    if (typeof draft !== "string" && (draft.type === "distance" || draft.type === "radius")) draft.value *= unitScale(this.sk);
+    return draft;
+  }
+
+  /** The same, with lengths as the drawing measures them. */
+  private drawnDimension(at?: V): ConstraintDraft | string {
     const { pts, lines, rounds } = this.picked();
     const mm = this.mm();
     const xy = (p: Point): V => [p.x, p.y];
@@ -2758,7 +2803,7 @@ export class App {
 
   /** The number shown to the user: degrees for angles, plain value otherwise. A measure shows what it measures now. */
   private shownValue(d: Dimension): string {
-    const v = d.measure ? measuredValue(this.sk, d) : d.value;
+    const v = d.measure ? measuredDimValue(this.sk, d) : d.value;
     return formatNumber(d.type === "angle" ? v / DEG : v);
   }
 
@@ -2784,6 +2829,13 @@ export class App {
     const before = clone(this.sk);
     const old = d.value;
     d.value = v;
+    // The only length dimension there is has nothing to be measured against: it says what its line is worth, and nothing moves.
+    const only = isLengthDimension(d) && this.sk.constraints.filter(isLengthDimension).length === 1;
+    const drawn = measuredValue(this.sk, d);
+    if (only && drawn > 1e-12) {
+      this.sk.lengthScale = v / drawn;
+      this.toast("The first dimension sets the scale, so nothing moves. Later ones are measured against it.");
+    }
     let r = this.solver.solve(this.sk);
     if (!r.ok) {
       // A big jump can fail from the current shape; walk there in small steps.
@@ -2848,7 +2900,7 @@ export class App {
     if (t.kind === "load") return s && isLoad(s) ? s.label : null;
     if (t.kind === "datum") return s?.type === "datum" ? s.label : null;
     // An etalon with no name of its own shows its length; that is what the box starts with.
-    if (t.kind === "etalon") return s?.type === "etalon" ? s.label.trim() || formatNumber(Number(s.length.toPrecision(6))) : null;
+    if (t.kind === "etalon") return s?.type === "etalon" ? s.label.trim() || this.inUnits(s.length, 6) : null;
     return s?.type === "frame" ? (t.axis === "x" ? s.xLabel : s.yLabel) : null;
   }
 
@@ -3397,6 +3449,17 @@ export class App {
     // Keep the figure clear of the title block in the bottom corner.
     const reserved = Math.min(this.titleblock.offsetHeight + 20, this.view.h / 3);
     const usable = this.view.h - reserved;
+    // The print preview shows the page the figure is exported on, with its size written under it.
+    this.fig = this.preview ? fitFigure(this.sk) : null;
+    if (this.fig) {
+      const { page, mm } = this.fig;
+      const bw = (page.x1 - page.x0) / mm, bh = (page.y1 - page.y0) / mm;
+      const caption = 34;
+      this.view.scale = Math.min((this.view.w - 48) / bw, (usable - 24 - caption) / bh);
+      this.view.cx = (page.x0 + page.x1) / 2 / mm;
+      this.view.cy = (page.y0 + page.y1) / 2 / mm - (reserved + caption) / 2 / this.view.scale;
+      return this.render();
+    }
     // Twice: how much room axes take in the drawing depends on the zoom being worked out.
     for (let pass = 0; pass < 2; pass++) {
       const mm = this.mm();
@@ -3598,7 +3661,7 @@ export class App {
       this.dofCell(count, state, cls) +
       `<label class="tb-cell tb-size" title="How large text, arrows and symbols are in the exported figure. Double-click for 100%."><span class="tb-k">Dimension size in print</span>` +
       `<span class="tb-v"><input id="dim-scale" data-scale="dim" type="range" min="${DIM_SCALE_MIN}" max="${DIM_SCALE_MAX}" step="5" value="${percent}" aria-valuetext="${percent}%"><output id="dim-scale-out" for="dim-scale">${percent}%</output></span></label>` +
-      `<label class="tb-cell" title="How wide the drawn geometry is in the exported figure."><span class="tb-k">Figure width</span><span class="tb-v"><input id="fig-width" data-scale="width" type="text" inputmode="decimal" value="${width}"> cm</span></label>`;
+      `<label class="tb-cell" title="How wide the exported figure is: everything in it, with a 5 % margin all round."><span class="tb-k">Figure width</span><span class="tb-v"><input id="fig-width" data-scale="width" type="text" inputmode="decimal" value="${width}"> cm</span></label>`;
   }
 
   private dofCell(count: string, state: string, cls: string): string {
@@ -3629,7 +3692,7 @@ export class App {
 
   /** What stands beside a hatching slider: the stroke length in the drawing's units, or the number of strokes. */
   private hatchLabel(s: Extract<Sym, { type: "hatch" }>, which: "depth" | "freq"): string {
-    if (which === "depth") return formatNumber(Number(s.depth.toPrecision(3)));
+    if (which === "depth") return this.inUnits(s.depth, 3);
     const n = hatchCount(curveLength(this.sk, s.on), s.spacing);
     return `${n} ${n === 1 ? "stroke" : "strokes"}`;
   }
@@ -3637,7 +3700,7 @@ export class App {
   /** What stands beside a load's size slider: how large it is drawn, in the drawing's units. */
   private loadSizeLabel(s: AnyLoad): string {
     const magnitude = s.type === "lineload" ? Math.max(s.q1, s.q2) : s.value;
-    return formatNumber(Number((magnitude * loadScaleOf(this.sk, loadKind(s))).toPrecision(3)));
+    return this.inUnits(magnitude * loadScaleOf(this.sk, loadKind(s)), 3);
   }
 
   /** What stands beside the gaps slider: the number asked for, and the number drawn when fewer fit. */
@@ -3685,8 +3748,8 @@ export class App {
         html += `<h2>Coordinate axes</h2>`;
         html += text("First axis label", "sym-xlabel", s.xLabel, "", true);
         html += text("Second axis label", "sym-ylabel", s.yLabel, "Written as TeX math. Leave empty for no label. Clicking a label on the drawing edits it there.", true);
-        html += number("First axis length (in the drawing's units)", "sym-xsize", formatNumber(Number(s.xSize.toPrecision(4))));
-        html += number("Second axis length (in the drawing's units)", "sym-ysize", formatNumber(Number(s.ySize.toPrecision(4))), "Set a length to 0 to leave that axis out. The lengths belong to the drawing: neither size slider changes them.");
+        html += number("First axis length (in the drawing's units)", "sym-xsize", this.inUnits(s.xSize));
+        html += number("Second axis length (in the drawing's units)", "sym-ysize", this.inUnits(s.ySize), "Set a length to 0 to leave that axis out. The lengths belong to the drawing: neither size slider changes them.");
         html += number("Rotation (degrees)", "sym-angle", degrees(s.angle));
         html += rotate;
         html += `<p class="muted note-block">Drag an arrow tip to make that axis longer or shorter. ${s.at ? "The axes are pinned to a joint and move with it; drag them away to free them." : "Drag the axes anywhere. Dropped on a joint, they stay pinned there."}</p>`;
@@ -3715,7 +3778,7 @@ export class App {
       case "etalon":
         html += `<h2>Etalon</h2>`;
         html += text("Name", "sym-label", s.label, "What the bar is worth, as TeX math: 1\\,\\mathrm{m}, or 10\\,\\mathrm{kN} for forces drawn at a scale. Left empty, it shows its length in the drawing's units. Clicking it on the drawing edits it there.", true);
-        html += number("Length (in the drawing's units)", "sym-length", formatNumber(Number(s.length.toPrecision(6))), "Dragging the handle at its far end sets this too, at a round length; hold Alt for any length.");
+        html += number("Length (in the drawing's units)", "sym-length", this.inUnits(s.length, 6), "Dragging the handle at its far end sets this too, at a round length; hold Alt for any length.");
         html += number("Parts", "sym-parts", String(Math.max(1, Math.round(s.parts ?? 1))), "Marks it off into equal parts with shorter ticks, as on a ruler. 1 has ticks at the ends only.");
         html += number("Rotation (degrees)", "sym-angle", degrees(s.angle));
         html += rotate;
@@ -3782,13 +3845,12 @@ export class App {
       case "trace": {
         const plots = this.sk.plots ?? [];
         const plot = plots.find((p) => p.id === s.plot);
-        const plain = (v: number) => formatNumber(Number(v.toPrecision(6)));
         html += `<h2>Diagram at a point</h2>`;
         html += `<label class="field"><span>Plot</span><select data-field="sym-plot">${plots.map((p) =>
           `<option value="${p.id}"${p.id === s.plot ? " selected" : ""}>${esc(p.name || "Plot")}</option>`).join("")}</select>` +
           `<small>Its curves given by a parameter are drawn with the point as their origin, in the plot's colours and line styles.${plot && !plot.curves.some((c) => c.param) ? " This plot has none." : ""}</small></label>`;
         html += `<button type="button" class="plain" data-act="edit-plot">Edit this plot</button>`;
-        html += number("One unit of the plot is", "sym-unit", plain(s.scale), "This long in the drawing.");
+        html += number("One unit of the plot is", "sym-unit", this.inUnits(s.scale, 6), "This long in the drawing.");
         html += number("Rotation (degrees)", "sym-angle", degrees(s.angle ?? 0), "Of the plot's x axis, anticlockwise. Dragging the curves round the point turns them too.");
         if (plot?.curves.some((c) => c.param && c.fill)) html += `<label class="check"><input data-field="sym-shade" type="checkbox"${s.plain ? "" : " checked"}><span>Shade what the plot shades</span></label>`;
         html += `<p class="muted note-block">Moving the point moves the curves with it.</p>`;
@@ -3952,7 +4014,7 @@ export class App {
         html += `<div class="field"><span id="place-label">Drawn</span><div class="segmented" role="group" aria-labelledby="place-label">` +
           `<button type="button" data-place="inside" aria-pressed="${!d.outside}">Inside</button>` +
           `<button type="button" data-place="outside" aria-pressed="${!!d.outside}">Outside</button></div></div>`;
-        const shown = d.len !== undefined ? formatNumber(Number(d.len.toPrecision(4))) : "";
+        const shown = d.len !== undefined ? this.inUnits(d.len) : "";
         html += `<label class="field"><span>Arrow length (in the drawing's units)</span><input data-field="radius-len" type="text" inputmode="decimal" value="${shown}" placeholder="${d.outside ? "standard" : "from the centre"}">` +
           `<small>${d.outside ? "Empty: a standard length. " : "Empty: the arrow starts at the centre. "}Dragging the dimension sets the length too, and pulling it across the rim moves it inside or outside.</small></label>`;
       }
@@ -3963,7 +4025,7 @@ export class App {
     } else if (entities === 1 && pts.length === 1 && !syms.length && !cons.length && this.datumOn(pts[0].id)) {
       // The dot of a datum point is the point itself: show the datum, with what holds the point.
       const attached = this.sk.constraints.filter((c) => constraintRefs(c).includes(pts[0].id));
-      const extra = `<p class="muted">x ${formatNumber(pts[0].x)}, y ${formatNumber(pts[0].y)}</p>` +
+      const extra = `<p class="muted">x ${this.inUnits(pts[0].x, 6)}, y ${this.inUnits(pts[0].y, 6)}</p>` +
         `<h3>Constraints on the point</h3>${attached.length ? this.constraintRows(attached) : `<p class="muted">None yet.</p>`}`;
       html += this.symbolPanel(this.datumOn(pts[0].id)!, extra);
     } else if (cons.length >= 1 && entities === 0 && !syms.length) {
@@ -3993,7 +4055,7 @@ export class App {
       count(syms.length, "symbol", "symbols");
       html += `<h2>${names.join(", ")}</h2>`;
       if (pts.length === 1 && entities === 1) {
-        html += `<p class="muted">x ${formatNumber(pts[0].x)}, y ${formatNumber(pts[0].y)}</p>`;
+        html += `<p class="muted">x ${this.inUnits(pts[0].x, 6)}, y ${this.inUnits(pts[0].y, 6)}</p>`;
       }
       const cs: Curve[] = [...lines, ...rounds];
       if (cs.length) {
@@ -4053,7 +4115,7 @@ export class App {
       } else {
         html += `<ol class="steps"><li><b>Draw.</b> On the Sketch tab, place joints with the Line tool; exact positions do not matter yet.</li>` +
           `<li><b>Constrain.</b> Press a constraint, then click the geometry it applies to. Curves turn black once nothing about them can move.</li>` +
-          `<li><b>Dimension.</b> Press Dimension, the first of the constraints, click a line, middle-click where the dimension goes and type its length.</li>` +
+          `<li><b>Dimension.</b> Press Dimension, the first of the constraints, click a line, middle-click where the dimension goes and type its length. The first one only sets the scale; after that, the drawing follows the number.</li>` +
           `<li><b>Annotate.</b> Supports, loads, balloons, fills and hatching are on the Annotate tab.</li></ol>`;
       }
     }
@@ -4399,7 +4461,7 @@ export class App {
 
   /** One of an element's sizes as it is shown beside its slider, in the drawing's units. */
   private elementSizeLabel(e: Line | Arc, what: "across" | "pitch"): string {
-    return formatNumber(Number(lookOf(this.sk, e)[what].toPrecision(3)));
+    return this.inUnits(lookOf(this.sk, e)[what], 3);
   }
 
   /** The colour of the selected curves: black, one of a few, or any other. */
@@ -4583,7 +4645,7 @@ export class App {
     if (!d?.measure) return;
     const before = clone(this.sk);
     const baseline = this.result;
-    d.value = measuredValue(this.sk, d);
+    d.value = measuredDimValue(this.sk, d);
     delete d.measure;
     const r = this.solver.solve(this.sk);
     if (!r.ok || r.conflicting.length > baseline.conflicting.length || r.redundant.length > baseline.redundant.length) {
@@ -4605,7 +4667,7 @@ export class App {
     const value = mode === "aligned" ? dist([a.x, a.y], [b.x, b.y]) : Math.abs(mode === "horizontal" ? b.x - a.x : b.y - a.y);
     if (mode === "aligned" && value < 1e-9) return this.toast("Those two points are in the same place.");
     d.mode = mode;
-    d.value = value;
+    d.value = value * unitScale(this.sk);
     d.offset = this.outsideOffset(a, b, mode);
     const r = this.solver.solve(this.sk);
     if (!r.ok || r.conflicting.length || r.redundant.length > this.result.redundant.length) {
@@ -4654,8 +4716,8 @@ export class App {
         return slide(this.gapsLabel(s));
       } else if (s.type === "frame" && (field === "sym-xsize" || field === "sym-ysize")) {
         if (!Number.isFinite(v) || v < 0) { this.toast("An axis length must be zero or more."); return this.touch(); }
-        if (field === "sym-xsize") s.xSize = v;
-        else s.ySize = v;
+        if (field === "sym-xsize") s.xSize = this.fromUnits(v);
+        else s.ySize = this.fromUnits(v);
       } else if (s.type === "frame" && field === "sym-xlabel") s.xLabel = label;
       else if (s.type === "frame" && field === "sym-ylabel") s.yLabel = label;
       else if (s.type === "balloon" && field === "sym-text") s.text = label;
@@ -4667,7 +4729,7 @@ export class App {
       else if ((s.type === "datum" || isLoad(s) || s.type === "etalon") && field === "sym-label") s.label = label;
       else if (s.type === "etalon" && field === "sym-length") {
         if (!(v > 0)) { this.toast("The length is a number above zero, in the drawing's units."); return this.touch(); }
-        s.length = v;
+        s.length = this.fromUnits(v);
       } else if (s.type === "etalon" && field === "sym-parts") {
         const n = Math.round(v);
         if (!(n >= 1 && n <= 50)) { this.toast("The number of parts is a whole number from 1 to 50."); return this.touch(); }
@@ -4698,7 +4760,7 @@ export class App {
         if (before > 0 && after > 0) s.scale *= before / after;
       } else if (s.type === "trace" && field === "sym-unit") {
         if (!(v > 0)) { this.toast("The size is a number above zero: how long one unit of the plot is in the drawing."); return this.touch(); }
-        s.scale = v;
+        s.scale = this.fromUnits(v);
       } else if (s.type === "trace" && field === "sym-shade") {
         if (input.checked) delete s.plain;
         else s.plain = true;
@@ -4820,7 +4882,7 @@ export class App {
     if (field === "radius-len" && d.type === "radius") {
       const v = parseNumber(input.value);
       if (input.value.trim() === "") delete d.len;
-      else if (Number.isFinite(v) && v > 0) d.len = v;
+      else if (Number.isFinite(v) && v > 0) d.len = this.fromUnits(v);
       else { this.toast("The arrow length must be a number greater than zero."); return this.touch(); }
       return this.commit();
     }

@@ -7,7 +7,7 @@ import {
   type Arc, type Line, type Curve, type Sym, type Support, type Frame, type CenterMark, type Balloon,
   type Fill as FillSym, type Hatch, type Datum, type Note, type Load, type LineLoad, type Moment, type AnyLoad, type LoadKind, type Diagram, type Trace,
   type Etalon, type RightAngle,
-  entity, point, arcRadius, arcAngles, isDimension, isNamed, geometryBox, geometryExtent,
+  entity, point, arcRadius, arcAngles, isDimension, isNamed, isLengthDimension, unitScale, geometryBox, geometryExtent,
 } from "./model";
 import { elementPaths, elementReach } from "./element";
 import {
@@ -298,6 +298,9 @@ const P = (sk: Sketch, id: Id, mm: number): V => {
   return [p.x * mm, p.y * mm];
 };
 
+/** Below this length, in paper mm, a dimension line has its arrowheads outside the extension lines: two heads and a little room. */
+export const SHORT_SPAN = 2 * PAPER.arrowLen + 1;
+
 /** Where a distance dimension's line runs, in paper mm. */
 export function distanceFrame(sk: Sketch, d: DistanceDim, mm: number) {
   const A = P(sk, d.a, mm), B = P(sk, d.b, mm);
@@ -325,20 +328,44 @@ function distancePrims(sk: Sketch, d: DistanceDim, mm: number): Prim[] {
     const dir = norm(sub(to, from));
     out.push({ ...base, k: "line", stroke: "dim", a: add(from, mul(dir, PAPER.extGap)), b: add(to, mul(dir, PAPER.extOver)) });
   }
-  out.push({ ...base, k: "line", stroke: "dim", a: f.A2, b: f.B2, arrowA: true, arrowB: true });
-  const at = mid(f.A2, f.B2);
-  const along = (d.text ?? (d.mode === "aligned" ? "along" : "upright")) === "along";
-  const span = sub(f.B2, f.A2);
-  if (!along || len(span) < 1e-9) {
-    out.push({ ...base, k: "text", at, tex: dimTex(d), anchor: anchorFor(f.out) });
-    return out;
+  const span = sub(f.B2, f.A2), spanLen = len(span);
+  const u = spanLen > 1e-9 ? mul(span, 1 / spanLen) : perp(f.n);
+  const short = spanLen < SHORT_SPAN;
+  /** How far past the second extension line the dimension line runs: as far as the arrowhead brought in from outside. */
+  const past = short ? PAPER.arrowLen + 2.2 : 0;
+  if (!short) out.push({ ...base, k: "line", stroke: "dim", a: f.A2, b: f.B2, arrowA: true, arrowB: true });
+  else {
+    // Too short for both arrowheads between the extension lines: they point in from outside.
+    if (spanLen > 1e-9) out.push({ ...base, k: "line", stroke: "dim", a: f.A2, b: f.B2 });
+    out.push({ ...base, k: "line", stroke: "dim", a: sub(f.A2, mul(u, past)), b: f.A2, arrowB: true });
+    out.push({ ...base, k: "line", stroke: "dim", a: add(f.B2, mul(u, past)), b: f.B2, arrowB: true });
   }
+  const tex = dimTex(d);
+  const along = (d.text ?? (d.mode === "aligned" ? "along" : "upright")) === "along" && spanLen > 1e-9;
   // Turned to run along the dimension line, the way that reads from below or from the right.
-  let rot = angleOf(span);
+  let rot = along ? angleOf(span) : 0;
   if (rot > Math.PI / 2 + 1e-9) rot -= Math.PI;
   else if (rot <= -Math.PI / 2 + 1e-9) rot += Math.PI;
+  // Wider than the room between the extension lines, the number goes past the second one, in line with the dimension line.
+  const m = texEngine().measure(tex);
+  const w = m.w * PAPER.em, h = (m.asc + m.desc) * PAPER.em;
+  const room = along ? w : Math.abs(u[0]) * w + Math.abs(u[1]) * h;
+  if (spanLen > 1e-9 && room + 2 * PAPER.textSep > spanLen) {
+    const at = add(f.B2, mul(u, past));
+    const text: TextPrim = along
+      ? { ...base, k: "text", at, tex, anchor: dot(u, [Math.cos(rot), Math.sin(rot)]) > 0 ? "w" : "e" }
+      : { ...base, k: "text", at, tex, anchor: anchorFor(u) };
+    if (Math.abs(rot) > 1e-9) text.rot = rot;
+    out.push(text);
+    return out;
+  }
+  const at = mid(f.A2, f.B2);
+  if (!along) {
+    out.push({ ...base, k: "text", at, tex, anchor: anchorFor(f.out) });
+    return out;
+  }
   const up: V = [-Math.sin(rot), Math.cos(rot)];
-  const text: TextPrim = { ...base, k: "text", at, tex: dimTex(d), anchor: dot(f.out, up) >= 0 ? "s" : "n" };
+  const text: TextPrim = { ...base, k: "text", at, tex, anchor: dot(f.out, up) >= 0 ? "s" : "n" };
   if (Math.abs(rot) > 1e-9) text.rot = rot;
   out.push(text);
   return out;
@@ -417,7 +444,7 @@ export function dimensionPrims(sk: Sketch, given: Dimension, mm: number): Prim[]
   let d = given;
   if (given.measure) {
     const { label: _, ...rest } = given;
-    d = { ...rest, value: measuredValue(sk, given) } as Dimension;
+    d = { ...rest, value: measuredDimValue(sk, given) } as Dimension;
   }
   const prims = d.type === "distance" ? distancePrims(sk, d, mm)
     : d.type === "angle" ? anglePrims(sk, d, mm)
@@ -432,9 +459,33 @@ export function dimensionPrims(sk: Sketch, given: Dimension, mm: number): Prim[]
   return prims;
 }
 
+/** What a dimension measures now in the units it is typed in: a length as the sketch's scale has it, an angle in radians. */
+export function measuredDimValue(sk: Sketch, d: Dimension): number {
+  const v = measuredValue(sk, d);
+  return d.type === "angle" ? v : v * unitScale(sk);
+}
+
 /**
- * What a dimension measures in the sketch as it is now: a distance, an angle
- * in radians counter-clockwise from its first line to its second, or a radius.
+ * Keeps the sketch's scale in step with its length dimensions. With none
+ * there is no scale, so the next one sets a new one. Where one is missing,
+ * the first length dimension sets it at what its line measures, so nothing
+ * moves.
+ */
+export function settleLengthScale(sk: Sketch): void {
+  const dims = sk.constraints.filter(isLengthDimension);
+  if (!dims.length) {
+    delete sk.lengthScale;
+    return;
+  }
+  if (sk.lengthScale !== undefined && sk.lengthScale > 0 && Number.isFinite(sk.lengthScale)) return;
+  const d = dims[0], m = measuredValue(sk, d);
+  sk.lengthScale = m > 1e-12 && d.value > 0 ? d.value / m : 1;
+}
+
+/**
+ * What a dimension measures in the sketch as it is now, in the drawing's own
+ * units: a distance, an angle in radians counter-clockwise from its first
+ * line to its second, or a radius.
  */
 export function measuredValue(sk: Sketch, d: Dimension): number {
   if (d.type === "distance") {
@@ -772,13 +823,13 @@ export function etalonEnds(s: Etalon, mm: number): [V, V] {
   return [a, polar(a, s.length * mm, s.angle)];
 }
 
-/** What an etalon is labelled with: its own name, or else its length in the drawing's units. */
-export function etalonTex(s: Etalon): string {
-  return s.label.trim() ? labelTex(s.label) : formatNumber(Number(s.length.toPrecision(6)));
+/** What an etalon is labelled with: its own name, or else its length in the units the sketch is dimensioned in. */
+export function etalonTex(sk: Sketch, s: Etalon): string {
+  return s.label.trim() ? labelTex(s.label) : formatNumber(Number((s.length * unitScale(sk)).toPrecision(6)));
 }
 
 /** An etalon: the bar, a tick at each end and between its parts, and its name above it, read the right way up. */
-function etalonPrims(s: Etalon, mm: number): Prim[] {
+function etalonPrims(sk: Sketch, s: Etalon, mm: number): Prim[] {
   const base = { ref: s.id, layer: "sym" as const };
   const [a, b] = etalonEnds(s, mm);
   const u: V = [Math.cos(s.angle), Math.sin(s.angle)];
@@ -795,7 +846,7 @@ function etalonPrims(s: Etalon, mm: number): Prim[] {
   const parts = Math.max(1, Math.round(s.parts ?? 1));
   const L = s.length * mm;
   for (let i = 1; i < parts; i++) tick(add(a, mul(u, (L * i) / parts)), PAPER.etalonPart);
-  const text: TextPrim = { ...base, k: "text", at: add(mid(a, b), mul(up, PAPER.etalonTick)), tex: etalonTex(s), anchor: "s", part: "label" };
+  const text: TextPrim = { ...base, k: "text", at: add(mid(a, b), mul(up, PAPER.etalonTick)), tex: etalonTex(sk, s), anchor: "s", part: "label" };
   if (Math.abs(rot) > 1e-9) text.rot = rot;
   out.push(text);
   return out;
@@ -1151,7 +1202,7 @@ export function symbolPrims(sk: Sketch, s: Sym, mm: number): Prim[] {
       return loadPrims(sk, s, mm);
     case "diagram": return diagramPrims(sk, s, mm);
     case "trace": return tracePrims(sk, s, mm);
-    case "etalon": return etalonPrims(s, mm);
+    case "etalon": return etalonPrims(sk, s, mm);
     case "rightangle": return rightAnglePrims(sk, s, mm);
   }
 }

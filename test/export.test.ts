@@ -1,7 +1,8 @@
 import { describe, it, expect, afterEach } from "vitest";
 import { emptySketch, addPoint, addLine, addCircle, addArc, addConstraint, addSupport, addSymbol, type Sketch } from "../src/model";
 import { geometryExtent } from "../src/model";
-import { toSvg as svgOf, toTikz as tikzOf, figurePrims as primsOf, figureBounds } from "../src/export";
+import { toSvg as svgOf, toTikz as tikzOf, figureBounds, fitFigure } from "../src/export";
+import { toSvg as layoutSvg, toTikz as layoutTikz, figurePrims as layoutPrims } from "./layout";
 import { findFaces } from "../src/regions";
 import { createMathJaxEngine } from "../src/mathjax";
 import { setTexEngine, plainEngine } from "../src/tex";
@@ -13,9 +14,9 @@ const tenMm = (sk: Sketch): Sketch => {
   sk.figureWidthMm = geometryExtent(sk) * 10 * sk.dimScale || 80;
   return sk;
 };
-const toSvg = (sk: Sketch) => svgOf(tenMm(sk));
-const toTikz = (sk: Sketch) => tikzOf(tenMm(sk));
-const figurePrims = (sk: Sketch) => primsOf(tenMm(sk));
+const toSvg = (sk: Sketch) => layoutSvg(tenMm(sk));
+const toTikz = (sk: Sketch) => layoutTikz(tenMm(sk));
+const figurePrims = (sk: Sketch) => layoutPrims(tenMm(sk));
 
 /** A 40 mm beam (4 units at 10 mm each) with a length dimension labelled 2a. */
 function beam(): Sketch {
@@ -246,22 +247,13 @@ describe("export", () => {
     expect(svg).toContain("<path");
   });
 
-  it("enlarges the whole figure by the dimension size, keeping the geometry at the figure width", () => {
+  it("enlarges text, arrows and lines by the dimension size", () => {
     setTexEngine(createMathJaxEngine());
     const sk = beam();
     sk.figureWidthMm = 40;
-    const plain = svgOf(sk)!;
-    const tikz1 = tikzOf(sk)!;
+    const tikz1 = layoutTikz(sk)!;
     sk.dimScale = 2;
-    // Laid out with the geometry at half the width, then everything doubled: 40 mm of beam either way.
-    const big = svgOf(sk)!;
-    const size = (svg: string) => /width="([\d.]+)mm" height="([\d.]+)mm" viewBox="0 0 ([\d.]+) ([\d.]+)"/.exec(svg)!.slice(1).map(Number);
-    const [w1, h1] = size(plain), [w2, h2, vw2] = size(big);
-    expect(w1).toBeCloseTo(40 + 2 + 0.28, 1);
-    expect(w2).toBeCloseTo(40 + 2 + 0.56, 1);    // the line is twice as thick, so are its round ends
-    expect(vw2).toBeCloseTo(w2 / 2, 1);
-    expect(h2).toBeGreaterThan(h1);              // the text and arrows take more room
-    const tikz2 = tikzOf(sk)!;
+    const tikz2 = layoutTikz(sk)!;
     expect(tikz1).toContain("[x=1mm, y=1mm,");
     expect(tikz1).not.toContain("every node");
     expect(tikz2).toContain("[x=2mm, y=2mm,");
@@ -269,5 +261,83 @@ describe("export", () => {
     expect(tikz2).toContain("member/.style={line width=1.6pt}");
     expect(tikz2).toContain("tip/.tip={Stealth[length=3.6mm, width=2.2mm, inset=1.01mm]}");
     expect(tikz2).toContain("\\draw[member] (0,0) -- (20,0);"); // 20 units of 2 mm
+  });
+
+  describe("fitted to its page", () => {
+    const sizeOf = (svg: string) => /width="([\d.]+)mm" height="([\d.]+)mm" viewBox="0 0 ([\d.]+) ([\d.]+)"/.exec(svg)!.slice(1).map(Number);
+
+    it("is exactly the figure width, everything in it inside a 5 % margin", () => {
+      setTexEngine(createMathJaxEngine());
+      const sk = beam();
+      sk.figureWidthMm = 80;
+      const fig = fitFigure(sk)!;
+      expect(fig.width).toBeCloseTo(80, 6);
+      expect(fig.margin).toBeCloseTo(4, 6);
+      // The figure, its dimension included, fills the 72 mm inside the margin.
+      expect(fig.box.x1 - fig.box.x0).toBeCloseTo(72, 2);
+      expect(fig.page.x0).toBeCloseTo(fig.box.x0 - 4, 6);
+      expect(fig.page.y1).toBeCloseTo(fig.box.y1 + 4, 6);
+      const [w, h, vw] = sizeOf(svgOf(sk)!);
+      expect(w).toBeCloseTo(80, 2);
+      expect(vw).toBeCloseTo(80, 2);
+      expect(h).toBeCloseTo(fig.box.y1 - fig.box.y0 + 8, 1);
+      // TikZ is held to the same box, whatever LaTeX makes of the text.
+      expect(tikzOf(sk)!).toMatch(/\\useasboundingbox \(([-\d.]+),([-\d.]+)\) rectangle \(([-\d.]+),([-\d.]+)\);/);
+      const [x0, , x1] = /\\useasboundingbox \(([-\d.]+),([-\d.]+)\) rectangle \(([-\d.]+),([-\d.]+)\);/.exec(tikzOf(sk)!)!.slice(1).map(Number);
+      expect(x1 - x0).toBeCloseTo(80, 1);
+    });
+
+    it("scales only the drawing: text and arrowheads keep their size, so the beam is shorter than the width", () => {
+      setTexEngine(createMathJaxEngine());
+      const sk = beam();
+      // A label that sticks out past both ends of the beam.
+      (sk.constraints[0] as { label?: string }).label = "\\text{a rather long label}";
+      sk.figureWidthMm = 40;
+      const fig = fitFigure(sk)!;
+      expect(fig.box.x1 - fig.box.x0).toBeCloseTo(36, 2);
+      const text = fig.prims.find((p) => p.k === "text")!;
+      expect(text).toBeDefined();
+      // The beam is what is left once the label has its room.
+      expect(4 * fig.mm).toBeLessThan(36);
+    });
+
+    it("keeps its width at any dimension size: the larger text leaves the drawing less room", () => {
+      setTexEngine(createMathJaxEngine());
+      const sk = beam();
+      sk.figureWidthMm = 60;
+      const one = fitFigure(sk)!;
+      sk.dimScale = 2;
+      const two = fitFigure(sk)!;
+      expect(two.width).toBeCloseTo(60, 6);
+      expect(sizeOf(svgOf(sk)!)[0]).toBeCloseTo(60, 2);
+      expect(sizeOf(svgOf(sk)!)[2]).toBeCloseTo(30, 2); // drawn in annotation mm, enlarged twice
+      expect(4 * two.mm * 2).toBeLessThanOrEqual(4 * one.mm + 1e-6);
+    });
+
+    it("prints the same however the lengths are dimensioned", () => {
+      const sk = beam();
+      delete (sk.constraints[0] as { label?: string }).label;
+      sk.figureWidthMm = 80;
+      const a = fitFigure(sk)!;
+      const km = beam();
+      delete (km.constraints[0] as { label?: string }).label;
+      (km.constraints[0] as { value: number }).value = 4;
+      km.lengthScale = 1000;
+      km.figureWidthMm = 80;
+      const b = fitFigure(km)!;
+      expect(b.mm).toBeCloseTo(a.mm, 6);
+    });
+
+    it("centres a figure much taller than it is wide on its page", () => {
+      const sk = emptySketch();
+      const a = addPoint(sk, 0, 0), b = addPoint(sk, 0.5, 20);
+      addLine(sk, a.id, b.id);
+      sk.figureWidthMm = 80;
+      const fig = fitFigure(sk)!;
+      expect(fig.width).toBeCloseTo(80, 6);
+      expect(fig.box.x1 - fig.box.x0).toBeLessThan(72);
+      expect((fig.box.y1 - fig.box.y0) * 0.3).toBeCloseTo(72, 2);
+      expect((fig.page.x0 + fig.page.x1) / 2).toBeCloseTo((fig.box.x0 + fig.box.x1) / 2, 6);
+    });
   });
 });
