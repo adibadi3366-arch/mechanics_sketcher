@@ -16,10 +16,10 @@ const rnd = () => { seed = (seed * 1664525 + 1013904223) >>> 0; return seed / 42
 const R = (a: number, b: number) => a + (b - a) * rnd();
 
 /** The curves of these sketches, which never hold a Bézier curve. */
-const plainCurves = (sk: Sketch) => curves(sk) as Exclude<Curve, { type: "bezier" }>[];
+const plainCurves = (sk: Sketch) => curves(sk) as Exclude<Curve, { type: "bezier" | "spline" }>[];
 
 /** Points sampled along a curve. */
-function sample(sk: Sketch, e: Exclude<Curve, { type: "bezier" }>, n = 40): [number, number][] {
+function sample(sk: Sketch, e: Exclude<Curve, { type: "bezier" | "spline" }>, n = 40): [number, number][] {
   const out: [number, number][] = [];
   if (e.type === "line") { const a = point(sk, e.p1), b = point(sk, e.p2); for (let i = 0; i <= n; i++) out.push([a.x + (b.x - a.x) * i / n, a.y + (b.y - a.y) * i / n]); return out; }
   const c = point(sk, e.c);

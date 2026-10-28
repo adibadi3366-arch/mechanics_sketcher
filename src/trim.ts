@@ -3,7 +3,7 @@
 
 import {
   type Sketch, type Id, type Curve, type Arc, type Constraint, type ConstraintDraft,
-  entity, point, points, curves, curvePoints, arcRadius, addPoint, addLine, addArc, remove, dropIfUnused,
+  entity, point, points, curves, curvePoints, arcRadius, addPoint, addLine, addArc, remove, dropIfUnused, isFreeCurve,
 } from "./model";
 import { type V, add, sub, mul, dot, dist, angleOf, polar, wrap, TWO_PI } from "./geom";
 
@@ -12,8 +12,8 @@ export type Shape =
   | { kind: "round"; c: V; r: number; a0: number; sweep: number; full: boolean };
 
 /** The curves trimming works with: Bézier curves are neither trimmed nor trimmed against. */
-type Trimmable = Exclude<Curve, { type: "bezier" }>;
-const trimmable = (sk: Sketch): Trimmable[] => curves(sk).filter((e): e is Trimmable => e.type !== "bezier");
+type Trimmable = Exclude<Curve, { type: "bezier" | "spline" }>;
+const trimmable = (sk: Sketch): Trimmable[] => curves(sk).filter((e): e is Trimmable => e.type !== "bezier" && e.type !== "spline");
 
 function shapeOf(sk: Sketch, e: Trimmable): Shape {
   const xy = (id: Id): V => { const p = point(sk, id); return [p.x, p.y]; };
@@ -79,7 +79,7 @@ export function crossings(s: Shape, t: Shape, eps: number): V[] {
 
 /** The points where two curves meet, in model units. Lines running along each other give none. */
 export function intersections(sk: Sketch, e1: Curve, e2: Curve, eps: number): V[] {
-  if (e1.type === "bezier" || e2.type === "bezier") return [];
+  if (isFreeCurve(e1) || isFreeCurve(e2)) return [];
   return crossings(shapeOf(sk, e1), shapeOf(sk, e2), eps);
 }
 
@@ -127,7 +127,7 @@ export function strokeHits(sk: Sketch, a: V, b: V): { id: Id; at: V }[] {
 /** Works out what a click on `curveId` near `at` would trim away. */
 export function planTrim(sk: Sketch, curveId: Id, at: V): TrimPlan | null {
   const target = entity(sk, curveId);
-  if (!target || target.type === "point" || target.type === "bezier") return null;
+  if (!target || target.type === "point" || isFreeCurve(target)) return null;
   const eps = scaleOf(sk);
   const s = shapeOf(sk, target);
   const length = s.kind === "line" ? dist(s.a, s.b) : s.r * s.sweep;
@@ -179,7 +179,7 @@ export function planTrim(sk: Sketch, curveId: Id, at: V): TrimPlan | null {
  */
 export function applyTrim(sk: Sketch, plan: TrimPlan): ConstraintDraft[] {
   const target = entity(sk, plan.curve);
-  if (!target || target.type === "point" || target.type === "bezier") return [];
+  if (!target || target.type === "point" || isFreeCurve(target)) return [];
   if (plan.whole) {
     remove(sk, [target.id]);
     return [];

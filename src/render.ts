@@ -2,7 +2,7 @@
 // aids (point handles, constraint markers, previews) that never get exported.
 
 import {
-  type Sketch, type Id, type Constraint, type Curve, ORIGIN, entity, point, isDimension, arcRadius, controlPoints, fixedPoints,
+  type Sketch, type Id, type Constraint, type Curve, ORIGIN, entity, point, isDimension, arcRadius, controlPoints, fixedPoints, isFreeCurve,
 } from "./model";
 
 const pointXY = (sk: Sketch, id: Id): V => { const p = point(sk, id); return [p.x, p.y]; };
@@ -146,6 +146,7 @@ export function layoutGlyphs(sk: Sketch, view: View, show: (c: Constraint) => bo
     if (!e) return;
     if (e.type === "line") return atSpan(c, S(e.p1), S(e.p2));
     if (e.type === "bezier") return atSpan(c, S(e.p1), S(e.p2));
+    if (e.type === "spline") return atSpan(c, S(e.pts[0]), S(e.pts[e.pts.length - 1]));
     const ctr = point(sk, e.c);
     let ang = Math.PI / 4;
     let r = 0;
@@ -195,7 +196,7 @@ export function layoutGlyphs(sk: Sketch, view: View, show: (c: Constraint) => bo
       case "turn": atPoint(c, c.c); break;
       case "tangent": {
         const l = entity(sk, c.l), round = entity(sk, c.c);
-        if (!l || !round || round.type === "point" || round.type === "line" || round.type === "bezier" || l.type === "point" || l.type === "bezier") break;
+        if (!l || !round || round.type === "point" || round.type === "line" || isFreeCurve(round) || l.type === "point" || isFreeCurve(l)) break;
         if (l.type !== "line") {
           // Two circles or arcs: where they touch, on the rim of the second towards the first.
           const from = point(sk, round.c), to = point(sk, l.c);
@@ -362,8 +363,10 @@ export function drawPrims(s: PrimScene): string {
     } else if (p.k === "path") {
       out += `<polyline class="${cls}" points="${p.pts.map((q) => M(q).map(n2).join(",")).join(" ")}" ${sw}/>`;
     } else if (p.k === "bezier") {
-      const [a, b, c, d] = p.pts.map(M);
-      out += `<path class="${cls}" d="M${n2(a[0])} ${n2(a[1])}C${n2(b[0])} ${n2(b[1])} ${n2(c[0])} ${n2(c[1])} ${n2(d[0])} ${n2(d[1])}" ${sw}/>`;
+      const q = p.pts.map(M);
+      let d = `M${n2(q[0][0])} ${n2(q[0][1])}`;
+      for (let i = 1; i + 2 < q.length; i += 3) d += `C${n2(q[i][0])} ${n2(q[i][1])} ${n2(q[i + 1][0])} ${n2(q[i + 1][1])} ${n2(q[i + 2][0])} ${n2(q[i + 2][1])}`;
+      out += `<path class="${cls}" d="${d}" ${sw}/>`;
     } else {
       const [a0, a1] = strokedSweep(p);
       out += `<path class="${cls}" d="${arcPath(view, [p.c[0] / mm, p.c[1] / mm], p.r / mm, a0, a1)}" ${sw}/>`;

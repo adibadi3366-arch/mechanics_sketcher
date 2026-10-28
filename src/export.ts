@@ -7,7 +7,7 @@ import {
   type Prim, type StrokeStyle, type Outline, type Anchor, type LinePrim, type ArcPrim,
   PAPER, PT_MM, STROKE_DASH, dashOf, strokeWidth, printMm, buildPrims, arrowHeads, strokedEnds, strokedSweep, textBox, textCorners, outlinePolygon,
 } from "./prims";
-import { type V, type Box, emptyBox, grow, boxIsEmpty, polar, wrap, TWO_PI, bezierPoints } from "./geom";
+import { type V, type Box, emptyBox, grow, boxIsEmpty, polar, wrap, TWO_PI, bezierPoints, chainCubics } from "./geom";
 import { texEngine } from "./tex";
 import { latexAccents } from "./accents";
 import { outlinePath } from "./render";
@@ -100,7 +100,7 @@ export function figureBounds(prims: Prim[]): Box {
         grow(b, p.b, half);
       } else if (p.k === "circle") grow(b, p.c, p.r + half);
       else if (p.k === "poly" || p.k === "path") for (const q of p.pts) grow(b, q, half);
-      else if (p.k === "bezier") for (const q of bezierPoints(p.pts, 32)) grow(b, q, half);
+      else if (p.k === "bezier") for (const piece of chainCubics(p.pts)) for (const q of bezierPoints(piece, 32)) grow(b, q, half);
       else {
         const n = Math.max(2, Math.ceil((p.a1 - p.a0) / (Math.PI / 30)));
         for (let i = 0; i <= n; i++) grow(b, polar(p.c, p.r, p.a0 + ((p.a1 - p.a0) * i) / n), half);
@@ -180,8 +180,10 @@ export function primsToSvg(prims: Prim[], k = 1, page?: Box): string | null {
     } else if (p.k === "path") {
       body.push(`<polyline points="${p.pts.map(pt).join(" ")}" ${stroke}/>`);
     } else if (p.k === "bezier") {
-      const [a, b, c, d] = p.pts.map(M);
-      body.push(`<path d="M${num(a[0])} ${num(a[1])}C${num(b[0])} ${num(b[1])} ${num(c[0])} ${num(c[1])} ${num(d[0])} ${num(d[1])}" ${stroke}/>`);
+      const q = p.pts.map(M);
+      let d = `M${num(q[0][0])} ${num(q[0][1])}`;
+      for (let i = 1; i + 2 < q.length; i += 3) d += `C${num(q[i][0])} ${num(q[i][1])} ${num(q[i + 1][0])} ${num(q[i + 1][1])} ${num(q[i + 2][0])} ${num(q[i + 2][1])}`;
+      body.push(`<path d="${d}" ${stroke}/>`);
     } else {
       const [a0, a1] = strokedSweep(p);
       const s = M(polar(p.c, p.r, a0)), e = M(polar(p.c, p.r, a1));
@@ -362,8 +364,11 @@ export function tikzParts(prims: Prim[], k = 1): { styles: string[]; lines: stri
       }
       lines.push(`  \\draw[${style(p)}${tips(p, k)}] ${co(polar(p.c, p.r, p.a0))} arc[start angle=${deg(p.a0)}, end angle=${deg(p.a1)}, radius=${num(p.r, 2)}];`);
     } else if (p.k === "bezier") {
-      const [a, b, c, d] = p.pts;
-      lines.push(`  \\draw[${style(p)}] ${co(a)} .. controls ${co(b)} and ${co(c)} .. ${co(d)};`);
+      // A piece to a line of the file, so a long spline stays readable.
+      const q = p.pts;
+      const pieces: string[] = [];
+      for (let i = 1; i + 2 < q.length; i += 3) pieces.push(`.. controls ${co(q[i])} and ${co(q[i + 1])} .. ${co(q[i + 2])}`);
+      lines.push(`  \\draw[${style(p)}] ${co(q[0])} ${pieces.join("\n    ")};`);
     } else if (p.k === "path") {
       // A long curve is broken over lines of the file, so no line of it grows past what an editor shows.
       const rows: string[] = [];

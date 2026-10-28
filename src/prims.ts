@@ -6,13 +6,13 @@ import {
   type Sketch, type Id, type Dimension, type DistanceDim, type AngleDim, type RadiusDim,
   type Arc, type Line, type Curve, type Sym, type Support, type Frame, type CenterMark, type Balloon,
   type Fill as FillSym, type Hatch, type Datum, type Note, type Load, type LineLoad, type Moment, type AnyLoad, type LoadKind, type Diagram, type Trace,
-  type Etalon, type RightAngle, type Bezier, HATCH_GAP, PICTURE_OPACITY,
+  type Etalon, type RightAngle, type Bezier, type FreeCurve, HATCH_GAP, PICTURE_OPACITY,
   entity, point, arcRadius, arcAngles, isDimension, isNamed, isLengthDimension, unitScale, geometryBox, geometryExtent,
 } from "./model";
 import { elementPaths, elementReach } from "./element";
 import {
   type V, type Box, add, sub, mul, dot, norm, perp, mid, polar, dist, len, angleOf, wrap, inSweep,
-  distToSegment, intersectLines, TWO_PI, type Cubic, bezierAt, bezierTangent, bezierNearest, bezierPoints,
+  distToSegment, intersectLines, TWO_PI, type Cubic, bezierAt, bezierTangent, bezierPoints, splineCubics, chainNearest, chainPoints, chainCubics,
 } from "./geom";
 import { texEngine } from "./tex";
 import { baseline, diagramShape, traceShape } from "./diagram";
@@ -132,7 +132,12 @@ export interface PathPrim extends Base { k: "path"; pts: V[]; stroke: StrokeStyl
 /** A picture, in the editor only: its bottom left corner and size, at `opacity`. */
 export interface ImagePrim extends Base { k: "image"; at: V; w: number; h: number; src: string; opacity: number }
 /** A cubic Bézier curve: start, the two control points, end. */
-export interface BezierPrim extends Base { k: "bezier"; pts: Cubic; stroke: StrokeStyle; width?: number; dash?: number[] }
+export interface BezierPrim extends Base {
+  k: "bezier";
+  /** One or more cubic pieces end to end: the start, then two controls and an end for each piece. */
+  pts: V[];
+  stroke: StrokeStyle; width?: number; dash?: number[];
+}
 /** Counter-clockwise from a0 to a1, with a1 > a0. */
 export interface ArcPrim extends Base { k: "arc"; c: V; r: number; a0: number; a1: number; stroke: StrokeStyle; width?: number; dash?: number[]; arrowA?: boolean; arrowB?: boolean; head?: number }
 /**
@@ -538,7 +543,8 @@ export function measuredValue(sk: Sketch, d: Dimension): number {
 type CurveShape =
   | { kind: "line"; a: V; b: V }
   | { kind: "round"; c: V; r: number; a0: number; a1: number; full: boolean }
-  | { kind: "bezier"; q: Cubic };
+  /** A Bézier curve or a spline: cubic pieces end to end. */
+  | { kind: "bezier"; q: Cubic[] };
 
 function curveShape(sk: Sketch, id: Id): CurveShape | null {
   const e = entity(sk, id);
@@ -546,7 +552,7 @@ function curveShape(sk: Sketch, id: Id): CurveShape | null {
   const xy = (pid: Id): V => { const p = point(sk, pid); return [p.x, p.y]; };
   if (e.type === "line") return { kind: "line", a: xy(e.p1), b: xy(e.p2) };
   if (e.type === "circle") return { kind: "round", c: xy(e.c), r: e.r, a0: 0, a1: TWO_PI, full: true };
-  if (e.type === "bezier") return { kind: "bezier", q: [xy(e.p1), xy(e.c1), xy(e.c2), xy(e.p2)] };
+  if (e.type === "bezier" || e.type === "spline") return { kind: "bezier", q: cubicsOf(sk, e) };
   return { kind: "round", c: xy(e.c), r: arcRadius(sk, e), ...arcAngles(sk, e), full: false };
 }
 
@@ -556,12 +562,25 @@ export function bezierOf(sk: Sketch, e: Bezier): Cubic {
   return [xy(e.p1), xy(e.c1), xy(e.c2), xy(e.p2)];
 }
 
+/** A Bézier curve, or a spline, as its cubic pieces in model units: one for a Bézier curve, one from each point to the next for a spline. */
+export function cubicsOf(sk: Sketch, e: FreeCurve): Cubic[] {
+  if (e.type === "bezier") return [bezierOf(sk, e)];
+  return splineCubics(e.pts.map((id): V => { const p = point(sk, id); return [p.x, p.y]; }), !!e.closed);
+}
+
+/** Where along a run of pieces t, from 0 to 1, falls: which piece, and where on it. */
+function onChain(n: number, t: number): { i: number; u: number } {
+  const s = Math.max(0, Math.min(1, t)) * n;
+  const i = Math.min(n - 1, Math.floor(s));
+  return { i, u: s - i };
+}
+
 /** The point at parameter t of a curve: a fraction along a line or arc, an angle on a circle. */
 export function pointOnCurve(sk: Sketch, id: Id, t: number): V | null {
   const c = curveShape(sk, id);
   if (!c) return null;
   if (c.kind === "line") return add(c.a, mul(sub(c.b, c.a), t));
-  if (c.kind === "bezier") return bezierAt(c.q, Math.max(0, Math.min(1, t)));
+  if (c.kind === "bezier") { const { i, u } = onChain(c.q.length, t); return bezierAt(c.q[i], u); }
   return polar(c.c, c.r, c.full ? t : c.a0 + t * (c.a1 - c.a0));
 }
 
@@ -574,7 +593,7 @@ export function curveParam(sk: Sketch, id: Id, q: V): number {
     const l2 = dot(d, d);
     return l2 < 1e-18 ? 0 : Math.max(0, Math.min(1, dot(sub(q, c.a), d) / l2));
   }
-  if (c.kind === "bezier") return bezierNearest(c.q, q).t;
+  if (c.kind === "bezier") { const r = chainNearest(c.q, q); return (r.i + r.t) / c.q.length; }
   const ang = angleOf(sub(q, c.c));
   if (c.full) return ang;
   return Math.max(0, Math.min(1, wrap(ang - c.a0) / (c.a1 - c.a0)));
@@ -586,8 +605,8 @@ export function sideOfCurve(sk: Sketch, id: Id, q: V): number {
   if (!c) return 0;
   if (c.kind === "line") return dot(sub(q, c.a), perp(norm(sub(c.b, c.a))));
   if (c.kind === "bezier") {
-    const { t, d } = bezierNearest(c.q, q);
-    return Math.sign(dot(sub(q, bezierAt(c.q, t)), perp(bezierTangent(c.q, t)))) * d;
+    const { i, t, d } = chainNearest(c.q, q);
+    return Math.sign(dot(sub(q, bezierAt(c.q[i], t)), perp(bezierTangent(c.q[i], t)))) * d;
   }
   return c.r - dist(q, c.c);
 }
@@ -1131,7 +1150,7 @@ export function curveLength(sk: Sketch, id: Id): number {
   const c = curveShape(sk, id);
   if (!c) return 0;
   if (c.kind === "bezier") {
-    const pts = bezierPoints(c.q, 64);
+    const pts = c.q.flatMap((q, i) => bezierPoints(q, 64).slice(i ? 1 : 0));
     let l = 0;
     for (let i = 1; i < pts.length; i++) l += dist(pts[i - 1], pts[i]);
     return l;
@@ -1164,7 +1183,7 @@ function hatchPrims(sk: Sketch, s: Hatch, mm: number): Prim[] {
   }
   if (c.kind === "bezier") {
     // Along the curve at equal steps of its length, each leaning off its direction there.
-    const pts = bezierPoints(c.q.map((q) => mul(q, mm)) as Cubic, 96);
+    const pts = c.q.flatMap((q, i) => bezierPoints(q.map((x) => mul(x, mm)) as Cubic, 96).slice(i ? 1 : 0));
     const at = [0];
     for (let i = 1; i < pts.length; i++) at.push(at[i - 1] + dist(pts[i - 1], pts[i]));
     const length = at[at.length - 1];
@@ -1209,11 +1228,15 @@ export function fillOutlines(sk: Sketch, f: FillSym, mm: number): Outline[] {
       const from = at(i), to = at(i + 1);
       const arcId = f.arcs[i];
       const arc = arcId ? entity(sk, arcId) : undefined;
-      if (arc?.type === "bezier") {
-        // Run from this corner to the next, the way round the curve that goes that way.
-        const [a, b, c, d] = bezierOf(sk, arc).map((q) => mul(q, mm)) as Cubic;
-        const forward = dist(a, from) <= dist(d, from);
-        segs.push(forward ? { k: "C", to, c1: b, c2: c } : { k: "C", to, c1: c, c2: b });
+      if (arc?.type === "bezier" || arc?.type === "spline") {
+        // The piece that runs between this corner and the next, the way round that goes from this one to that.
+        const pieces = cubicsOf(sk, arc).map((q) => q.map((x) => mul(x, mm)) as Cubic);
+        const near = (a: V, b: V) => dist(a, b) <= 1e-6 * (1 + Math.hypot(...a));
+        const fw = pieces.find((q) => near(q[0], from) && near(q[3], to));
+        const bw = fw ? undefined : pieces.find((q) => near(q[3], from) && near(q[0], to));
+        if (fw) segs.push({ k: "C", to, c1: fw[1], c2: fw[2] });
+        else if (bw) segs.push({ k: "C", to, c1: bw[2], c2: bw[1] });
+        else segs.push({ k: "L", to });
         return;
       }
       if (arc?.type !== "arc") {
@@ -1431,8 +1454,8 @@ export function buildPrims(sk: Sketch, mm: number, opts: BuildOptions): Prim[] {
       name();
     } else if (e.type === "circle") {
       out.push({ ...base, k: "circle", c: P(sk, e.c, mm), r: e.r * mm });
-    } else if (e.type === "bezier") {
-      out.push({ ...base, k: "bezier", pts: bezierOf(sk, e).map((q) => mul(q, mm)) as Cubic });
+    } else if (e.type === "bezier" || e.type === "spline") {
+      out.push({ ...base, k: "bezier", pts: chainPoints(cubicsOf(sk, e)).map((q) => mul(q, mm)) });
     } else {
       const { a0, a1 } = arcAngles(sk, e);
       const arc: ArcPrim = { ...base, k: "arc", c: P(sk, e.c, mm), r: arcRadius(sk, e) * mm, a0, a1 };
@@ -1585,7 +1608,7 @@ export function primDistance(p: Prim, q: V): number {
       for (let i = 1; i < p.pts.length; i++) best = Math.min(best, distToSegment(q, p.pts[i - 1], p.pts[i]));
       return best;
     }
-    case "bezier": return bezierNearest(p.pts, q).d;
+    case "bezier": return chainNearest(chainCubics(p.pts), q).d;
     case "image": return q[0] >= p.at[0] && q[0] <= p.at[0] + p.w && q[1] >= p.at[1] && q[1] <= p.at[1] + p.h ? 0 : Infinity;
     case "arc": {
       const ang = angleOf(sub(q, p.c));

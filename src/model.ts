@@ -150,8 +150,41 @@ export interface Bezier {
   lx?: undefined;
   ly?: undefined;
 }
-export type Entity = Point | Line | Circle | Arc | Bezier;
-export type Curve = Line | Circle | Arc | Bezier;
+/**
+ * A spline: a smooth curve through its points, in order, as CAD programs
+ * draw one. The points are points of the sketch like any other, to join,
+ * constrain and dimension. Closed, it runs on from the last back to the first.
+ */
+export interface Spline {
+  id: Id;
+  type: "spline";
+  pts: Id[];
+  closed?: true;
+  /** A helper: dashed in the editor and left out of the figure. */
+  construction?: boolean;
+  /** A centre line: thin dash-dot, and not an edge of any shape. */
+  centre?: boolean;
+  /** Line thickness in points, at a dimension size of 100%. Unset: the standard thickness for how it is drawn. */
+  weight?: number;
+  /** Drawn with dashes. */
+  dashed?: boolean;
+  /** CSS hex colour it is drawn in. Unset: black. */
+  color?: string;
+  /** Projected from an earlier sketch: it follows the entity with this id there, and cannot move on its own. */
+  ref?: Id;
+  /** Never an arrow or a machine element, and never named: these are here so curves can be asked alike. */
+  arrow?: undefined;
+  element?: undefined;
+  look?: undefined;
+  label?: undefined;
+  lx?: undefined;
+  ly?: undefined;
+}
+export type Entity = Point | Line | Circle | Arc | Bezier | Spline;
+export type Curve = Line | Circle | Arc | Bezier | Spline;
+/** A Bézier curve or a spline: curves drawn freely, which no constraint takes as a whole, only their points. */
+export type FreeCurve = Bezier | Spline;
+export const isFreeCurve = (e: Entity | undefined): e is FreeCurve => e?.type === "bezier" || e?.type === "spline";
 
 export interface Coincident { id: Id; type: "coincident"; a: Id; b: Id }
 export interface PointOn { id: Id; type: "pointOn"; p: Id; on: Id }
@@ -832,6 +865,7 @@ export function curvePoints(e: Curve): Id[] {
   if (e.type === "line") return [e.p1, e.p2];
   if (e.type === "circle") return [e.c];
   if (e.type === "bezier") return [e.p1, e.c1, e.c2, e.p2];
+  if (e.type === "spline") return [...e.pts];
   return [e.c, e.p1, e.p2];
 }
 
@@ -850,7 +884,14 @@ export function addBezier(sk: Sketch, p1: Id, c1: Id, c2: Id, p2: Id): Bezier {
 
 /** The ends of a curve, where it can meet others: a circle has none. */
 export function curveEnds(e: Curve): Id[] {
+  if (e.type === "spline") return e.closed ? [] : [e.pts[0], e.pts[e.pts.length - 1]];
   return e.type === "circle" ? [] : [e.p1, e.p2];
+}
+
+export function addSpline(sk: Sketch, pts: Id[], closed = false): Spline {
+  const s: Spline = { id: newId(sk, "line"), type: "spline", pts, ...(closed ? { closed: true as const } : {}) };
+  sk.entities.push(s);
+  return s;
 }
 
 /** Every entity id a constraint refers to. */
@@ -1043,6 +1084,16 @@ export function remove(sk: Sketch, ids: Iterable<Id>): void {
   const candidates = new Set<Id>();
   for (const e of curves(sk)) {
     const pts = curvePoints(e);
+    // A spline that loses some of its points runs through the rest, while it has two.
+    if (e.type === "spline" && !gone.has(e.id) && pts.some((p) => gone.has(p))) {
+      const kept = e.pts.filter((p) => !gone.has(p));
+      if (kept.length >= 2) {
+        pts.forEach((p) => candidates.add(p));
+        e.pts = kept;
+        if (kept.length < 3) delete e.closed;
+        continue;
+      }
+    }
     if (gone.has(e.id) || pts.some((p) => gone.has(p))) {
       gone.add(e.id);
       pts.forEach((p) => candidates.add(p));

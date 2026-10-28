@@ -4,7 +4,7 @@
 
 import {
   type Sketch, type Id, type Curve, type Arc, type Sym, type Link, type Pair, type HalfPair, type ArrowEnds, type ElementLook,
-  ORIGIN, entity, point, curves, curvePoints, addPoint, addLine, addCircle, addArc, addBezier, addSymbol, newId,
+  ORIGIN, entity, point, curves, curvePoints, addPoint, addLine, addCircle, addArc, addBezier, addSpline, addSymbol, newId,
   geometryBox,
 } from "./model";
 import { type V, add, sub, mul, dot, cross, norm, dist, boxIsEmpty } from "./geom";
@@ -113,6 +113,7 @@ function copyOnce(sk: Sketch, src: Batch, move: Move, link: Link, tol: number, s
       e.type === "line" ? (stays(e.p1) && stays(e.p2)) || (lands(e.p1, e.p2) && lands(e.p2, e.p1))
       : e.type === "circle" ? stays(e.c)
       : e.type === "bezier" ? [e.p1, e.c1, e.c2, e.p2].every(stays)
+      : e.type === "spline" ? e.pts.every(stays)
       : stays(e.c) && ((stays(e.p1) && stays(e.p2)) || (move.flips && lands(e.p1, e.p2)));
     if (own) cmap.set(id, id);
     else todo.push(e);
@@ -153,6 +154,8 @@ function copyOnce(sk: Sketch, src: Batch, move: Move, link: Link, tol: number, s
       link.circles.push([e.id, made.id]);
     } else if (e.type === "bezier") {
       made = addBezier(sk, image(e.p1), image(e.c1), image(e.c2), image(e.p2));
+    } else if (e.type === "spline") {
+      made = addSpline(sk, e.pts.map((id) => image(id)), !!e.closed);
     } else {
       // An arc runs counter-clockwise, so a mirror image has its ends the other way round.
       const [p1, p2] = move.flips ? [image(e.p2), image(e.p1)] : [image(e.p1), image(e.p2)];

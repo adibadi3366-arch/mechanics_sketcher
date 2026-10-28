@@ -115,3 +115,49 @@ export function bezierNearest(q: Cubic, p: V): { t: number; d: number } {
   }
   return best;
 }
+
+/**
+ * A smooth curve through points, as cubic Bézier pieces from each point to
+ * the next (Catmull-Rom): at each point it runs parallel to the line from the
+ * point before to the point after. An open curve leaves its ends heading
+ * straight for the next point; a closed one runs on from the last point back
+ * to the first.
+ */
+export function splineCubics(pts: V[], closed = false): Cubic[] {
+  const n = pts.length;
+  if (n < 2) return [];
+  const at = (i: number): V => {
+    if (closed) return pts[((i % n) + n) % n];
+    if (i < 0) return sub(mul(pts[0], 2), pts[1]);
+    if (i >= n) return sub(mul(pts[n - 1], 2), pts[n - 2]);
+    return pts[i];
+  };
+  const out: Cubic[] = [];
+  for (let i = 0; i < (closed ? n : n - 1); i++) {
+    const p0 = at(i - 1), p1 = at(i), p2 = at(i + 1), p3 = at(i + 2);
+    out.push([p1, add(p1, mul(sub(p2, p0), 1 / 6)), sub(p2, mul(sub(p3, p1), 1 / 6)), p2]);
+  }
+  return out;
+}
+
+/** The point on a run of Bézier pieces nearest to p: which piece, where on it, and how far. */
+export function chainNearest(chain: Cubic[], p: V): { i: number; t: number; d: number } {
+  let best = { i: 0, t: 0, d: Infinity };
+  chain.forEach((q, i) => {
+    const r = bezierNearest(q, p);
+    if (r.d < best.d) best = { i, ...r };
+  });
+  return best;
+}
+
+/** A run of Bézier pieces as one list of points, start, then two controls and an end for each piece. */
+export function chainPoints(chain: Cubic[]): V[] {
+  return chain.length ? [chain[0][0], ...chain.flatMap((q) => [q[1], q[2], q[3]])] : [];
+}
+
+/** The pieces back out of such a list. */
+export function chainCubics(pts: V[]): Cubic[] {
+  const out: Cubic[] = [];
+  for (let i = 0; i + 3 < pts.length; i += 3) out.push([pts[i], pts[i + 1], pts[i + 2], pts[i + 3]]);
+  return out;
+}

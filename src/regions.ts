@@ -6,7 +6,7 @@
 // a point at the crossing are not split there, so such regions are not found.
 
 import { type Sketch, type Id, type Point, points, point, curves, curvePoints, arcRadius, isEdge } from "./model";
-import { type V, type Cubic, sub, dist, angleOf, polar, wrap, projectOnSegment, bezierPoints, TWO_PI } from "./geom";
+import { type V, type Cubic, sub, dist, angleOf, polar, wrap, projectOnSegment, bezierPoints, splineCubics, TWO_PI } from "./geom";
 
 /** A bounded region: corners in counter-clockwise order, and what joins each to the next. */
 export interface Face {
@@ -124,6 +124,11 @@ export function findFaces(sk: Sketch): Face[] {
       const q: Cubic = [pos(e.p1), pos(e.c1), pos(e.c2), pos(e.p2)];
       const node = (id: Id) => reps.find((r) => Math.hypot(r.x - point(sk, id).x, r.y - point(sk, id).y) < eps)?.id ?? id;
       link(node(e.p1), node(e.p2), e.id, e.id, bezierPoints(q).slice(1, -1));
+    } else if (e.type === "spline") {
+      // A spline joins each point it runs through to the next, and its last to its first when closed.
+      const node = (id: Id) => reps.find((r) => Math.hypot(r.x - point(sk, id).x, r.y - point(sk, id).y) < eps)?.id ?? id;
+      const pieces = splineCubics(e.pts.map(pos), !!e.closed);
+      pieces.forEach((q, i) => link(node(e.pts[i]), node(e.pts[(i + 1) % e.pts.length]), e.id, e.id, bezierPoints(q).slice(1, -1)));
     }
   }
 

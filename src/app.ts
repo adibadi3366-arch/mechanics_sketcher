@@ -5,7 +5,7 @@ import {
   type Sketch, type Id, type Point, type Line, type Circle, type Arc, type Curve, type Constraint,
   type ConstraintDraft, type Dimension, type DistanceMode, type Sym, type SupportKind, type LeaderEnd,
   type ArrowEnds, type Datum, type BalloonFrame, HATCH_GAP, PICTURE_OPACITY, type AnyLoad, type LoadKind, type Diagram, type Plot, isLoad, loadKind, geometryExtent,
-  type LineElement, type ElementLook, type Entity, type Bezier, isNamed, arcAngles, newId, controlPoints, addBezier,
+  type LineElement, type ElementLook, type Entity, type FreeCurve, isFreeCurve, isNamed, arcAngles, newId, controlPoints, addBezier, addSpline,
   ORIGIN, emptySketch, entity, point, constraint, symbol, symbolRefs, points, curves, curvePoints,
   constraintRefs, isDimension, isLengthDimension, unitScale, fixedPoints, isLink, isFixed, arcRadius, addPoint, addLine, addCircle, addArc, addConstraint,
   addSupport, addFrame, addSymbol, remove, serialize, deserialize, clone,
@@ -14,13 +14,13 @@ import { SketchSolver, type Drag, type SolveResult, type Freedom } from "./solve
 import { History } from "./history";
 import {
   type V, add, sub, mul, dot, cross, norm, perp, mid, dist, angleOf, polar, wrap, inSweep,
-  type Box, projectOnSegment, intersectLines, distToSegment, boxIsEmpty, grow, TWO_PI, bezierNearest,
+  type Box, projectOnSegment, intersectLines, distToSegment, boxIsEmpty, grow, TWO_PI, splineCubics, chainNearest, chainPoints,
 } from "./geom";
 import {
   type Prim, PAPER, PT_MM, printMm, geometryBox, buildPrims, dimensionPrims,
   primDistance, textCentre, distanceFrame, angleFrame, roundFrame, symbolPosition, balloonAnchor, measuredValue, measuredDimValue, settleLengthScale,
   curveParam, sideOfCurve, formatNumber, frameTips, arrowLabelAt, arrowAnchor, centerMarkEnds, etalonEnds, rightAngleFrame,
-  centerMarkDashes, curveLength, hatchCount, standardWeight, bezierOf, loadScaleOf, loadLabel, loadReach, lineLoadFrame,
+  centerMarkDashes, curveLength, hatchCount, standardWeight, cubicsOf, loadScaleOf, loadLabel, loadReach, lineLoadFrame,
 } from "./prims";
 import {
   type View, type Glyph, type Preview, type SnapMark, GLYPH_SIZE, PREVIEW_REF, toScreen, toModel,
@@ -46,7 +46,7 @@ import { baseline, beamAxis, diagramShape, plotPeak, traceShape, traceReach } fr
 import { defaultLook, lookOf, elementLength, springTurns } from "./element";
 
 type DrawTool =
-  | "point" | "line" | "centerline" | "arrow" | "arcarrow" | "circle" | "arc" | "bezier" | "beam" | "arcbeam"
+  | "point" | "line" | "centerline" | "arrow" | "arcarrow" | "circle" | "arc" | "bezier" | "spline" | "beam" | "arcbeam"
   /** A line or an arc drawn as something else: a spring, a damper, a spiral spring, a damper bent round a joint. */
   | "spring" | "damper" | "spiral" | "arcdamper";
 /** Tools that take two clicks and make a line between them. */
@@ -92,6 +92,8 @@ type Pending =
   | { tool: "circle"; center: Snap }
   /** A Bézier curve: its two ends are clicked, then how it bends. */
   | { tool: "bezier"; a: Snap; b?: Snap }
+  /** A spline: the points it runs through, so far. */
+  | { tool: "spline"; pts: Snap[] }
   | { tool: "arc"; center: Snap; start?: Snap; sweep: number; lastAng: number }
   /** A beam: its two centres are clicked first, then how wide it is. */
   | { tool: "beam"; a: Snap; b?: Snap }
@@ -173,6 +175,7 @@ const TOOLS: ToolDef[] = [
   { id: "circle", label: "Circle", key: "C", icon: "circle", tab: "sketch", group: 1 },
   { id: "arc", label: "Arc", key: "A", icon: "arc", tab: "sketch", group: 1 },
   { id: "bezier", label: "Bézier curve", short: "Bézier", icon: "bezier", tab: "sketch", group: 1 },
+  { id: "spline", label: "Spline", icon: "spline", tab: "sketch", group: 1 },
   { id: "point", label: "Point", key: "P", icon: "point", tab: "sketch", group: 1 },
   { id: "beam", label: "Beam", icon: "beam", tab: "sketch", group: 1 },
   { id: "arcbeam", label: "Curved beam", short: "Curved", icon: "arcbeam", tab: "sketch", group: 1 },
@@ -959,6 +962,9 @@ export class App {
         return `Click a line, an arc or a side of a beam to lay the plot along it, on the side positive values should go${param ? ", or a point to draw its parametric curves about" : ""}. ${done}`;
       }
       case "circle": return p ? "Click to set the radius." : `Click the centre. ${done}`;
+      case "spline": return p?.tool === "spline"
+        ? `Click the next point it runs through. Click the last one again, middle-click or press Enter to finish; click the first to close it. Right-click takes back the last point.`
+        : `Click the points the spline runs through, in order. ${done}`;
       case "bezier": return p?.tool === "bezier" ? (p.b ? "Move the pointer to bend the curve, and click. Select it later to drag its control points." : "Click where the curve ends.") : `Click where the curve starts. ${done}`;
       case "arc":
       case "arcarrow":
@@ -1020,6 +1026,14 @@ export class App {
       const raw = toModel(this.view, this.cursor);
       pv.lines.push([p.anchor.pos, raw]);
       pv.circles.push({ c: raw, r: PAPER.balloonRadius / this.mm() });
+      return pv;
+    }
+    if (p.tool === "spline") {
+      for (const q of p.pts) if (!q.pointId) pv.points.push(q.pos);
+      // Over the first point, it shows closed.
+      const closing = p.pts.length >= 3 && this.sameSpot(p.pts[0], snap);
+      const through = closing ? p.pts.map((q) => q.pos) : [...p.pts.map((q) => q.pos), snap.pos];
+      pv.beziers = splineCubics(through, closing);
       return pv;
     }
     if (p.tool === "bezier") {
@@ -1225,6 +1239,27 @@ export class App {
   }
 
   /** The point a drawing tool's next click is measured from, for H/V inference. */
+  /** True when two picks are the same place: the same point, or within a few pixels on screen. */
+  private sameSpot(a: Snap, b: Snap): boolean {
+    return (a.pointId !== undefined && a.pointId === b.pointId) || dist(toScreen(this.view, a.pos), toScreen(this.view, b.pos)) < 4;
+  }
+
+  /** Makes the spline whose points have been clicked, closed back to its first point if asked. With fewer than two points there is none. */
+  private finishSpline(closed: boolean): void {
+    const p = this.pending;
+    if (p?.tool !== "spline") return;
+    this.pending = null;
+    this.snapMark = null;
+    if (p.pts.length < 2) return this.touch();
+    const autos: ConstraintDraft[] = [];
+    const ids = p.pts.map((q) => this.materialize(q, autos));
+    const spline = addSpline(this.sk, ids, closed && ids.length >= 3);
+    if (this.constructing) spline.construction = true;
+    this.finishDrawing(autos);
+    this.selection = new Set([spline.id]);
+    this.touch();
+  }
+
   /**
    * A Bézier curve from a to b that bends through m, as a parabola would:
    * its control points are where the tangents at the ends meet the
@@ -1239,6 +1274,7 @@ export class App {
     const p = this.pending;
     if (p?.tool === "line") return p.start.pos;
     if (p?.tool === "bezier" && !p.b) return p.a.pos;
+    if (p?.tool === "spline") return p.pts[p.pts.length - 1].pos;
     if (p?.tool === "beam" && !p.b) return p.a.pos;
     return undefined;
   }
@@ -1272,8 +1308,8 @@ export class App {
         const nearMid = dist(pr.point, m) * this.view.scale < 9;
         bestCurveD = d;
         bestCurve = nearMid ? { pos: m, curveId: e.id, midpoint: true } : { pos: pr.point, curveId: e.id };
-      } else if (e.type !== "bezier") {
-        // A point cannot be held on a Bézier curve, so nothing snaps onto one but at its ends.
+      } else if (!isFreeCurve(e)) {
+        // A point cannot be held on a Bézier curve or a spline, so nothing snaps onto one but at its points.
         const c = point(this.sk, e.c);
         const C: V = [c.x, c.y];
         const r = e.type === "circle" ? e.r : arcRadius(this.sk, e);
@@ -1431,6 +1467,18 @@ export class App {
         return;
       }
       return this.makeArcBeam(p, toModel(this.view, sp));
+    }
+
+    if (this.tool === "spline") {
+      if (!p || p.tool !== "spline") {
+        this.pending = { tool: "spline", pts: [snap] };
+        return;
+      }
+      // The first point again closes it; the last one again finishes it.
+      if (p.pts.length >= 3 && this.sameSpot(p.pts[0], snap)) return this.finishSpline(true);
+      if (this.sameSpot(p.pts[p.pts.length - 1], snap)) return this.finishSpline(false);
+      p.pts.push(snap);
+      return;
     }
 
     if (this.tool === "bezier") {
@@ -1743,9 +1791,11 @@ export class App {
       const a = S(xy(e.p1)), b = S(xy(e.p2));
       return `M${a[0].toFixed(1)} ${a[1].toFixed(1)}L${b[0].toFixed(1)} ${b[1].toFixed(1)}`;
     }
-    if (e.type === "bezier") {
-      const [a, b, c, d] = [e.p1, e.c1, e.c2, e.p2].map((id) => S(xy(id)).map((v) => v.toFixed(1)).join(" "));
-      return `M${a}C${b} ${c} ${d}`;
+    if (e.type === "bezier" || e.type === "spline") {
+      const q = chainPoints(cubicsOf(sk, e)).map((v) => S(v).map((x) => x.toFixed(1)).join(" "));
+      let d = `M${q[0]}`;
+      for (let i = 1; i + 2 < q.length; i += 3) d += `C${q[i]} ${q[i + 1]} ${q[i + 2]}`;
+      return d;
     }
     const c = S(xy(e.c));
     if (e.type === "circle") {
@@ -1817,7 +1867,7 @@ export class App {
         if (e.type === "point" || e.construction) continue;
         let d: number;
         if (e.type === "line") d = distToSegment(sp, S(e.p1), S(e.p2));
-        else if (e.type === "bezier") d = bezierNearest(bezierOf(sk, e), toModel(this.view, sp)).d * this.view.scale;
+        else if (e.type === "bezier" || e.type === "spline") d = chainNearest(cubicsOf(sk, e), toModel(this.view, sp)).d * this.view.scale;
         else {
           const c = S(e.c), r = (e.type === "circle" ? e.r : arcRadius(sk, e)) * this.view.scale;
           d = Math.abs(dist(sp, c) - r);
@@ -1864,6 +1914,7 @@ export class App {
       const made = src.type === "line" ? addLine(sk, pointFor(src.p1), pointFor(src.p2))
         : src.type === "circle" ? addCircle(sk, pointFor(src.c), src.r)
         : src.type === "bezier" ? addBezier(sk, pointFor(src.p1), pointFor(src.c1), pointFor(src.c2), pointFor(src.p2))
+        : src.type === "spline" ? addSpline(sk, src.pts.map(pointFor), !!src.closed)
         : addArc(sk, pointFor(src.c), pointFor(src.p1), pointFor(src.p2));
       made.construction = true;
       made.ref = src.id;
@@ -3116,7 +3167,15 @@ export class App {
   }
 
   /** Esc and right-click: back out one level at a time. */
-  private cancel(): void {
+  private cancel(fromKey = false): void {
+    const p = this.pending;
+    // A spline being drawn keeps what has been clicked: Esc finishes it, a right-click takes back its last point.
+    if (!this.editing && p?.tool === "spline") {
+      if (fromKey) return this.finishSpline(false);
+      p.pts.pop();
+      if (!p.pts.length) this.pending = null;
+      return this.touch();
+    }
     if (this.editing) this.closeEditor();
     else if (this.pending) this.pending = null;
     else if (isCommand(this.tool) && this.selection.size) this.selection.clear();
@@ -3131,6 +3190,7 @@ export class App {
    * the shape being drawn, and with nothing in progress leaves the tool.
    */
   private confirm(sp: V): void {
+    if (this.pending?.tool === "spline") return this.finishSpline(false);
     if (isPlaced(this.tool) && this.canApply(this.tool)) {
       this.placeDimension(sp);
     } else if (this.pending) {
@@ -3609,12 +3669,12 @@ export class App {
   // ---- constraint commands ------------------------------------------------------
 
   private picked() {
-    const pts: Point[] = [], lines: Line[] = [], rounds: (Circle | Arc)[] = [], beziers: Bezier[] = [], cons: Constraint[] = [], syms: Sym[] = [];
+    const pts: Point[] = [], lines: Line[] = [], rounds: (Circle | Arc)[] = [], beziers: FreeCurve[] = [], cons: Constraint[] = [], syms: Sym[] = [];
     for (const id of this.selection) {
       const e = entity(this.sk, id);
       if (e?.type === "point") pts.push(e);
       else if (e?.type === "line") lines.push(e);
-      else if (e?.type === "bezier") beziers.push(e);
+      else if (isFreeCurve(e)) beziers.push(e);
       else if (e) rounds.push(e);
       else {
         const c = constraint(this.sk, id);
@@ -4684,7 +4744,8 @@ export class App {
       count(lines.length, "line", "lines");
       count(rounds.filter((r) => r.type === "circle").length, "circle", "circles");
       count(rounds.filter((r) => r.type === "arc").length, "arc", "arcs");
-      count(beziers.length, "Bézier curve", "Bézier curves");
+      count(beziers.filter((b) => b.type === "bezier").length, "Bézier curve", "Bézier curves");
+      count(beziers.filter((b) => b.type === "spline").length, "spline", "splines");
       count(syms.length, "symbol", "symbols");
       html += `<h2>${names.join(", ")}</h2>`;
       if (pts.length === 1 && entities === 1) {
@@ -5825,7 +5886,8 @@ export class App {
       if (!this.spaceKey) { this.spaceKey = true; this.render(); }
       return;
     }
-    if (e.key === "Escape") return this.cancel();
+    if (e.key === "Escape") return this.cancel(true);
+    if (e.key === "Enter" && this.pending?.tool === "spline") { e.preventDefault(); return this.finishSpline(false); }
     if (e.key === "Delete" || e.key === "Backspace") { e.preventDefault(); return this.deleteSelection(); }
     if (e.key === "0" || e.key === "Home") return this.fit();
     if (e.key === "Enter" && this.tool === "select") {

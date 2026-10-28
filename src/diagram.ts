@@ -50,7 +50,7 @@ export function beamAxis(sk: Sketch, on: Id): NonNullable<Diagram["axis"]> | nul
   /** What closes the beam at a corner of this side: the centre that end is built on, and the corner across from this one. */
   const endAt = (corner: Id): { centre: Id; far: Id } | null => {
     for (const c of curves(sk)) {
-      if (c.id === side.id || c.type === "circle" || (c.p1 !== corner && c.p2 !== corner)) continue;
+      if (c.id === side.id || c.type === "circle" || c.type === "spline" || (c.p1 !== corner && c.p2 !== corner)) continue;
       const far = c.p1 === corner ? c.p2 : c.p1;
       if (c.type === "arc") {
         // A round end is an arc about its own centre, not about the centre of the bend.
