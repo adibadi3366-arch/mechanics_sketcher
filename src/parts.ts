@@ -52,7 +52,12 @@ export function splitDrawing(all: Sketch): Drawing {
     return t !== undefined && known.has(t) ? t : infos[0].id;
   };
   const origin = all.entities.find((e) => e.id === ORIGIN) ?? { id: ORIGIN, type: "point", x: 0, y: 0, standalone: true } as Entity;
-  const parts = infos.map((info): Part => ({ info, sk: blank(all, origin) }));
+  const parts = infos.map((info): Part => {
+    const sk = blank(all, origin);
+    if (info.color) sk.lineColor = info.color;
+    if (info.weight !== undefined) sk.lineWeight = info.weight;
+    return { info, sk };
+  });
   const byId = new Map(parts.map((p) => [p.info.id, p.sk]));
   // What is in a sketch is told by its tag; inside the sketch it is plain again.
   const untag = <T extends object>(x: T): T => {
@@ -84,12 +89,28 @@ export function mergeDrawing(d: Drawing, active: Sketch, figureOnly = false): Sk
     if (figureOnly && part.info.out) continue;
     const sk = part.info.id === d.active ? active : part.sk;
     const tag = <T extends object>(x: T): T => (figureOnly ? x : { ...x, sketch: part.info.id });
-    for (const e of sk.entities) if (e.id !== ORIGIN) all.entities.push(tag(e));
+    // In the figure, which is one sketch, every plain edge carries its sketch's colour and thickness itself.
+    const styled = (e: Entity): Entity => {
+      if (!figureOnly || e.type === "point" || e.construction || e.centre || (e.type !== "circle" && (e.arrow || e.element))) return e;
+      const out = { ...e };
+      if (!out.color && sk.lineColor) out.color = sk.lineColor;
+      if (out.weight === undefined && sk.lineWeight !== undefined) out.weight = sk.lineWeight;
+      return out;
+    };
+    for (const e of sk.entities) if (e.id !== ORIGIN) all.entities.push(tag(styled(e)));
     for (const c of sk.constraints) all.constraints.push(tag(c));
     for (const s of sk.symbols) all.symbols.push(tag(s));
   }
   if (!figureOnly) {
-    all.sketches = d.parts.map((p) => ({ ...p.info }));
+    all.sketches = d.parts.map((p) => {
+      const sk = p.info.id === d.active ? active : p.sk;
+      const info = { ...p.info };
+      delete info.color;
+      delete info.weight;
+      if (sk.lineColor) info.color = sk.lineColor;
+      if (sk.lineWeight !== undefined) info.weight = sk.lineWeight;
+      return info;
+    });
     all.active = d.active;
   }
   return all;

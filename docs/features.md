@@ -211,6 +211,7 @@ The live app shows the Support button for 3 seconds before an export finishes; t
 - **Short dimensions:** arrowheads point in from outside when they don't fit, and a number that doesn't fit goes past the extension line.
 - **Distance between parallel lines, and from a point to a line:** pick the two lines (or a point and a line) with Dimension; the dimension is measured square to the line and can be dragged along it.
 - **Sketches:** a drawing can be split into sketches, as tabs along the bottom. Only the one being worked on shows its dimensions and constraints; the others are thin grey lines, and each sketch is solved on its own. Each tab has an eye (hide it while working on another sketch) and a page (in or out of the exported figure); double-click a tab to rename it. Files stay one drawing, so the released app opens them as one sketch.
+- **Line colour and thickness per sketch:** with nothing selected, the side panel sets the colour and thickness of the sketch's plain lines, circles and arcs; anything with its own keeps it. Kept in SVG and TikZ.
 - **Project:** brings a line, circle, arc or point of a sketch to the left into the current one as orange reference geometry. It is fixed where its source is, follows it when that sketch changes, and is left out of the figure. Its side panel can make it the sketch's own.
 - **Faster on large drawings:** the check of what can still move takes one solve instead of one per point (about 20 ms instead of 0.6 s at 100 points).
 - **Exact values for sliders:** every slider has a box beside it to type the value.

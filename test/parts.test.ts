@@ -127,3 +127,22 @@ describe("a drawing of several sketches", () => {
     expect(Math.hypot(p.x, p.y)).toBeCloseTo(2, 6);
   });
 });
+
+describe("a sketch's line style", () => {
+  it("colours and thickens its plain edges, in the editor and in the figure, and is kept in the file", () => {
+    const d = splitDrawing(two());
+    const [frame, arm] = d.parts.map((p) => p.sk);
+    arm.lineColor = "#1565c0";
+    arm.lineWeight = 1.2;
+    const all = mergeDrawing(d, frame, true);
+    const armLine = all.entities.find((e) => e.type === "line" && !e.construction && (e as { p2: string }).p2 && point(all, (e as { p2: string }).p2).x === 14)!;
+    expect((armLine as { color?: string }).color).toBe("#1565c0");
+    expect((armLine as { weight?: number }).weight).toBe(1.2);
+    // The frame keeps black, the standard thickness.
+    expect(all.entities.filter((e) => e.type === "line" && !e.construction && !(e as { color?: string }).color)).toHaveLength(2);
+    const back = splitDrawing(deserialize(serialize(mergeDrawing(d, frame))));
+    expect(back.parts[1].sk.lineColor).toBe("#1565c0");
+    expect(back.parts[1].sk.lineWeight).toBe(1.2);
+    expect(back.parts[0].sk.lineColor).toBeUndefined();
+  });
+});

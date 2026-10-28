@@ -757,3 +757,8 @@ input.tex-shown:not(:focus) {
 .pt.ref, .pt.ref.defined, .pt.ref.fixed { fill: #d9480f; stroke: #d9480f; }
 .pt.ref.sel { fill: var(--sel); stroke: var(--sel); }
 .ref-note { border-left: 3px solid #d9480f; padding-left: 8px; }
+.sheet-dot { display: inline-block; width: 8px; height: 8px; margin-right: 6px; border-radius: 50%; vertical-align: 1px; }
+/* The style of the sketch's lines, folded away under its name until it is wanted. */
+.sketch-style { margin: 0 0 12px; padding: 8px 10px; border: 1px solid var(--rule); border-radius: 6px; background: var(--board-hi); }
+.sketch-style summary { cursor: pointer; font-weight: 500; }
+.sketch-style[open] summary { margin-bottom: 8px; }

@@ -17,7 +17,7 @@ import {
   type Box, projectOnSegment, intersectLines, distToSegment, boxIsEmpty, grow, TWO_PI,
 } from "./geom";
 import {
-  type Prim, PAPER, printMm, geometryBox, buildPrims, dimensionPrims,
+  type Prim, PAPER, PT_MM, printMm, geometryBox, buildPrims, dimensionPrims,
   primDistance, textCentre, distanceFrame, angleFrame, roundFrame, symbolPosition, balloonAnchor, measuredValue, measuredDimValue, settleLengthScale,
   curveParam, sideOfCurve, formatNumber, frameTips, arrowLabelAt, arrowAnchor, centerMarkEnds, etalonEnds, rightAngleFrame,
   centerMarkDashes, curveLength, hatchCount, standardWeight, loadScaleOf, loadLabel, loadReach, lineLoadFrame,
@@ -1824,7 +1824,7 @@ export class App {
     strip.innerHTML = this.drawing.parts.map((p) => {
       const on = p.info.id === this.drawing.active;
       return `<div class="sheet${on ? " on" : ""}${p.info.hidden && !on ? " gone" : ""}${p.info.out ? " out" : ""}" data-part="${p.info.id}">` +
-        `<button type="button" class="sheet-name" role="tab" aria-selected="${on}" data-sheet="open" title="${on ? "Double-click to rename" : "Work on this sketch"}">${esc(p.info.name)}</button>` +
+        `<button type="button" class="sheet-name" role="tab" aria-selected="${on}" data-sheet="open" title="${on ? "Double-click to rename" : "Work on this sketch"}">${(on ? this.sk : p.sk).lineColor ? `<span class="sheet-dot" style="background:${(on ? this.sk : p.sk).lineColor}"></span>` : ""}${esc(p.info.name)}</button>` +
         `<button type="button" class="sheet-btn" data-sheet="hide" aria-pressed="${!!p.info.hidden}"${on ? " disabled" : ""} title="${on ? "The sketch being worked on is always shown" : p.info.hidden ? "Hidden while you work on another sketch: show it" : "Hide it while you work on another sketch"}">${icon(p.info.hidden && !on ? "eyeoff" : "eye", 15)}</button>` +
         `<button type="button" class="sheet-btn" data-sheet="out" aria-pressed="${!p.info.out}" title="${p.info.out ? "Left out of the exported figure: put it in" : "In the exported figure: leave it out"}">${icon(p.info.out ? "pageoff" : "page", 15)}</button>` +
         (on && !one ? `<button type="button" class="sheet-btn" data-sheet="delete" title="Delete this sketch">${icon("close", 13)}</button>` : "") +
@@ -4460,7 +4460,8 @@ export class App {
         html += this.elementPanel();
         html += this.curveColorField(cs);
         // One slider for all of them; it shows the thickness of the first.
-        const weight = cs[0].weight ?? standardWeight(cs[0]);
+        const plainEdge = (c: Curve) => !c.construction && !c.centre && !(c.type !== "circle" && (c.arrow || c.element));
+        const weight = cs[0].weight ?? (plainEdge(cs[0]) && this.sk.lineWeight !== undefined ? this.sk.lineWeight : standardWeight(cs[0]));
         const own = cs.some((c) => c.weight !== undefined);
         html += `<label class="field"><span>Line thickness</span><span class="slider-row"><input data-field="weight" type="range" min="${WEIGHT_MIN}" max="${WEIGHT_MAX}" step="0.1" value="${weight}">${numberBox('data-num="weight"', this.weightLabel(weight), "Line thickness")}</span>` +
           `<small>In points, as LaTeX counts line widths${own ? "" : "; this is the standard thickness"}. It grows and shrinks with the dimension size in print. Double-click the slider to go back to the standard.</small></label>`;
@@ -4489,6 +4490,7 @@ export class App {
       html += `<button type="button" class="danger" data-act="delete">Delete selection</button>`;
     } else {
       html += `<h2>Nothing selected</h2>`;
+      html += this.sketchStyleFields();
       const over = findOverlaps(this.sk);
       const n = over.segments.length + over.rounds.length;
       if (n) html += `<p class="warn">${n === 1 ? "Two curves lie" : `Curves lie in ${n} places`} on top of each other, shown in red. Click there again to step through them and delete the extra one.</p>`;
@@ -4591,6 +4593,7 @@ export class App {
         else x.frame = ds.frame as BalloonFrame;
       });
       else if (ds.ccolor) this.setCurveColor(ds.ccolor === "none" ? null : ds.ccolor);
+      else if (ds.skcolor) this.setSketchColor(ds.skcolor === "none" ? null : ds.skcolor);
       else if (ds.color) this.setColor(ds.color);
       else if (ds.head) this.setArrowHead(ds.head as ArrowEnds);
       else if (ds.place) this.setRadiusPlace(ds.place === "outside");
@@ -4639,9 +4642,10 @@ export class App {
     this.panel.addEventListener("dblclick", (e) => {
       const input = e.target as HTMLInputElement;
       const field = input.dataset?.field;
-      if (field !== "weight" && field !== "support-scale") return;
+      if (field !== "weight" && field !== "support-scale" && field !== "sketch-weight") return;
       input.blur();
       if (field === "weight") return this.resetWeight();
+      if (field === "sketch-weight") { delete this.sk.lineWeight; return this.commit(); }
       delete this.sk.supportScale;
       this.commit();
     });
@@ -4883,6 +4887,29 @@ export class App {
       `<small>${cs.some((c) => c.construction) ? "A construction line keeps its own colours in the editor. " : ""}An arrow's head and name take its colour too.</small></div>`;
   }
 
+  /** The colour and thickness of the sketch's lines: for every plain line, circle and arc in it that has none of its own. */
+  private sketchStyleFields(): string {
+    const name = esc(activePart(this.drawing).info.name);
+    const now = this.sk.lineColor ?? "";
+    const swatch = (c: string, label: string) =>
+      `<button type="button" class="swatch" data-skcolor="${c || "none"}" aria-pressed="${now === c}" aria-label="${label}" title="${label}" style="background:${c || "#17201b"}"></button>`;
+    const weight = this.sk.lineWeight ?? Number((PAPER.member / PT_MM).toFixed(2));
+    return `<details class="sketch-style"${this.sk.lineColor || this.sk.lineWeight !== undefined ? " open" : ""}><summary>Lines of ${name}</summary>` +
+      `<div class="field"><span id="skcolour-label">Colour</span><div class="swatches" role="group" aria-labelledby="skcolour-label">` +
+      swatch("", "Black") + CURVE_COLORS.map((c) => swatch(c, `Colour ${c}`)).join("") +
+      `<label class="swatch custom" title="Another colour"><input data-field="sketch-color" type="color" value="${esc(now || "#17201b")}" aria-label="Another colour"></label></div></div>` +
+      `<label class="field"><span>Line thickness</span><span class="slider-row"><input data-field="sketch-weight" type="range" min="${WEIGHT_MIN}" max="${WEIGHT_MAX}" step="0.1" value="${weight}">${numberBox('data-num="sketch-weight"', this.weightLabel(weight), "Line thickness")}</span>` +
+      `<small>For every line, circle and arc of this sketch that has no colour or thickness of its own${this.sk.lineWeight === undefined ? "; this is the standard thickness" : ""}. Centre lines, arrows and springs keep theirs. Double-click the slider to go back to the standard.</small></label></details>`;
+  }
+
+  /** Gives the sketch's lines a colour, or black again with null. */
+  private setSketchColor(color: string | null): void {
+    if (color !== null && !/^#[0-9a-f]{6}$/i.test(color)) return;
+    if (color && color.toLowerCase() !== "#17201b") this.sk.lineColor = color;
+    else delete this.sk.lineColor;
+    this.commit();
+  }
+
   /** Draws the selected curves in a colour, or in black again with null. */
   private setCurveColor(color: string | null): void {
     if (color !== null && !/^#[0-9a-f]{6}$/i.test(color)) return;
@@ -5107,6 +5134,10 @@ export class App {
         if (Math.abs(v - 100) < 1e-9) delete this.sk.supportScale;
         else this.sk.supportScale = v / 100;
         break;
+      case "sketch-weight":
+        if (v < WEIGHT_MIN || v > WEIGHT_MAX) return no(`A line is between ${WEIGHT_MIN} and ${WEIGHT_MAX} pt thick.`);
+        this.sk.lineWeight = Number(v.toFixed(3));
+        break;
       case "weight": {
         if (v < WEIGHT_MIN || v > WEIGHT_MAX) return no(`A line is between ${WEIGHT_MIN} and ${WEIGHT_MAX} pt thick.`);
         const { lines, rounds } = this.picked();
@@ -5320,6 +5351,14 @@ export class App {
     }
 
     if (field === "curve-color") return this.setCurveColor(input.value);
+
+    if (field === "sketch-color") return this.setSketchColor(input.value);
+    if (field === "sketch-weight") {
+      const v = Math.max(WEIGHT_MIN, Math.min(WEIGHT_MAX, Number(input.value)));
+      if (!Number.isFinite(v)) return;
+      this.sk.lineWeight = Number(v.toFixed(2));
+      return slide(this.weightLabel(v));
+    }
 
     if (field === "weight") {
       const v = Math.max(WEIGHT_MIN, Math.min(WEIGHT_MAX, Number(input.value)));

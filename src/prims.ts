@@ -1293,6 +1293,11 @@ export function buildPrims(sk: Sketch, mm: number, opts: BuildOptions): Prim[] {
     if (e.color && !e.construction) base.ink = e.color;
     // Projected from another sketch: in a colour of its own, as reference geometry is in CAD.
     if (e.ref) base.ink = REF_INK;
+    // A plain edge takes its sketch's colour and thickness, where it has none of its own.
+    else if (base.stroke === "member") {
+      if (!e.color && sk.lineColor) base.ink = sk.lineColor;
+      if (e.weight === undefined && sk.lineWeight !== undefined) base.width = sk.lineWeight * PT_MM;
+    }
     const named = isNamed(e) ? e : null;
     const name = (): void => {
       const at = named ? arrowLabelAt(sk, named, mm) : null;

@@ -571,6 +571,10 @@ export interface Sketch {
   sketches?: SketchInfo[];
   /** The sketch being worked on. */
   active?: Id;
+  /** Colour of this sketch's lines, circles and arcs that have none of their own. Unset: black. */
+  lineColor?: string;
+  /** Thickness of this sketch's lines, circles and arcs that have none of their own, in points. Unset: the standard. */
+  lineWeight?: number;
 }
 
 /** One sketch of a drawing, as listed in the strip at the bottom. */
@@ -581,6 +585,10 @@ export interface SketchInfo {
   hidden?: true;
   /** Left out of the exported figure. */
   out?: true;
+  /** Colour of its lines, circles and arcs that have none of their own. */
+  color?: string;
+  /** Thickness of its lines, circles and arcs that have none of their own, in points. */
+  weight?: number;
 }
 
 // ---- plots ------------------------------------------------------------------
