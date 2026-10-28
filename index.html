@@ -46,8 +46,8 @@
     <span class="brand">Mech Sketch</span>
     <div class="group" id="file-actions">
       <button type="button" class="text-btn" data-act="new">New</button>
-      <button type="button" class="text-btn" data-act="open">Open</button>
-      <button type="button" class="text-btn" data-act="save">Save</button>
+      <button type="button" class="text-btn" data-act="open" title="Open a drawing: an SVG or TikZ file exported from Mech Sketch, or an older drawing file (Ctrl+O)">Open</button>
+      <button type="button" class="text-btn" data-act="save" title="Save the drawing as an SVG picture that Mech Sketch can open again with everything in it (Ctrl+S)">Save</button>
     </div>
     <div class="group menu" id="export-menu">
       <button type="button" class="text-btn menu-btn" id="export-btn" data-menu="export" aria-haspopup="menu" aria-expanded="false" aria-controls="export-list" title="Save or copy the figure for LaTeX">Export<svg class="caret" width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2 3.5l3 3 3-3"/></svg></button>
@@ -98,7 +98,7 @@
   <aside class="panel" id="panel" aria-label="Selection"></aside>
   <footer class="statusbar"><span id="hint"></span><span id="coords"></span></footer>
 </div>
-<input type="file" id="file-input" accept=".json,application/json" hidden>
+<input type="file" id="file-input" accept=".svg,.tex,.json,.png,.jpg,.jpeg,.gif,.webp,image/svg+xml,application/json,image/png,image/jpeg,image/gif,image/webp" hidden>
 <dialog id="name-dialog" aria-labelledby="name-title">
   <form method="dialog">
     <h2 id="name-title">Export</h2>
@@ -124,7 +124,7 @@
       <li><b>Dynamics.</b> The Dynamics tab has springs and dampers that stretch with what they are tied to, a torsion spring and damper, and the mark of a centre of mass.</li>
       <li><b>Plot.</b> The Plot tab is a workspace of its own for plotting functions, such as an internal force diagram, and curves given by a parameter. A plot is exported as SVG or for pgfplots, and Diagram on the Annotate tab lays one along a beam.</li>
     </ol>
-    <p class="muted">Your sketch is kept in this browser; Save writes it to a file to keep, or to take to another computer. A short tip appears the first time you pick up each tool. The question mark in the top right brings this page back; the speech bubble beside it is for reporting a bug or suggesting something.</p>
+    <p class="muted">Your sketch is kept in this browser. Save writes it to a file to keep, or to take to another computer: an SVG picture of the figure with the whole drawing inside it. Exported SVG and TikZ files carry the drawing too, so Open brings any of them back to edit. A short tip appears the first time you pick up each tool. The question mark in the top right brings this page back; the speech bubble beside it is for reporting a bug or suggesting something.</p>
     <p class="support-line" data-support-row hidden><span><b>Mech Sketch is free.</b> If it saves you time, you can support it.</span><span data-support="Support"></span></p>
     <div class="dialog-actions split">
       <label class="check"><input id="welcome-never" type="checkbox" checked><span>Don't show this again</span></label>

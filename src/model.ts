@@ -12,6 +12,8 @@ export interface Point {
   y: number;
   /** Placed with the Point tool, so it survives when nothing else uses it. */
   standalone?: boolean;
+  /** Imported from a drawing: fixed where it was put, and drawn only while it is pointed at. */
+  locked?: true;
   /** Projected from an earlier sketch: it follows the entity with this id there, and cannot move on its own. */
   ref?: Id;
 }
@@ -82,6 +84,8 @@ export interface Circle {
   color?: string;
   /** Projected from an earlier sketch: it follows the entity with this id there, and cannot move on its own. */
   ref?: Id;
+  /** Imported from a drawing: its size is fixed, as its centre is. */
+  locked?: true;
 }
 /** Counter-clockwise from p1 to p2 around c. */
 export interface Arc {
@@ -113,8 +117,41 @@ export interface Arc {
   /** Projected from an earlier sketch: it follows the entity with this id there, and cannot move on its own. */
   ref?: Id;
 }
-export type Entity = Point | Line | Circle | Arc;
-export type Curve = Line | Circle | Arc;
+/**
+ * A cubic Bézier curve from p1 to p2, pulled towards its two control points:
+ * it leaves p1 heading for c1 and arrives at p2 coming from c2. The control
+ * points are points of the sketch like any other, shown while the curve is
+ * selected.
+ */
+export interface Bezier {
+  id: Id;
+  type: "bezier";
+  p1: Id;
+  c1: Id;
+  c2: Id;
+  p2: Id;
+  /** A helper: dashed in the editor and left out of the figure. */
+  construction?: boolean;
+  /** A centre line: thin dash-dot, and not an edge of any shape. */
+  centre?: boolean;
+  /** Line thickness in points, at a dimension size of 100%. Unset: the standard thickness for how it is drawn. */
+  weight?: number;
+  /** Drawn with dashes. */
+  dashed?: boolean;
+  /** CSS hex colour it is drawn in. Unset: black. */
+  color?: string;
+  /** Projected from an earlier sketch: it follows the entity with this id there, and cannot move on its own. */
+  ref?: Id;
+  /** Never an arrow or a machine element, and never named: these are here so curves can be asked alike. */
+  arrow?: undefined;
+  element?: undefined;
+  look?: undefined;
+  label?: undefined;
+  lx?: undefined;
+  ly?: undefined;
+}
+export type Entity = Point | Line | Circle | Arc | Bezier;
+export type Curve = Line | Circle | Arc | Bezier;
 
 export interface Coincident { id: Id; type: "coincident"; a: Id; b: Id }
 export interface PointOn { id: Id; type: "pointOn"; p: Id; on: Id }
@@ -174,6 +211,13 @@ interface DimBase {
    * in the editor only. Its value is what was measured when it was made.
    */
   measure?: true;
+  /**
+   * Driven: it shows what the geometry measures, in the figure like any other
+   * dimension, but holds nothing, as a dimension of fixed geometry has to.
+   * Its value is what it measured when it was made, until it is typed: the
+   * only length dimension of the drawing then sets the scale.
+   */
+  driven?: true;
 }
 export type DistanceMode = "aligned" | "horizontal" | "vertical";
 export interface DistanceDim extends DimBase {
@@ -301,7 +345,15 @@ export interface Fill {
   curves: Id[];
   /** Circles inside the region that are left unfilled. */
   holes: Id[];
+  /** Hatched, as a cut is: with the strokes alone, or over the colour. Unset: the colour alone. */
+  look?: "hatch" | "both";
+  /** The angle of the hatching strokes, in radians counter-clockwise from the x axis. Unset: 45 degrees. */
+  hatchAngle?: number;
+  /** How far apart the strokes are, in mm on paper. Unset: HATCH_GAP. */
+  hatchGap?: number;
 }
+/** How far apart the strokes of a hatched fill are, in mm on paper, unless it says otherwise. */
+export const HATCH_GAP = 2;
 /** Short slanted strokes along one side of a curve, like the ground under a support. */
 export interface Hatch {
   id: Id;
@@ -500,7 +552,28 @@ export type LoadKind = "force" | "line" | "moment";
 export const loadKind = (s: AnyLoad): LoadKind => (s.type === "load" ? "force" : s.type === "lineload" ? "line" : "moment");
 export const isLoad = (s: Sym): s is AnyLoad => s.type === "load" || s.type === "lineload" || s.type === "moment";
 
-export type Sym = Support | Frame | CenterMark | Balloon | Fill | Hatch | Datum | Note | AnyLoad | Diagram | Trace | Etalon | RightAngle;
+/**
+ * A picture to trace over: shown under the drawing in the editor, never in
+ * the figure. Its corner and size are in model units, so it zooms with the
+ * drawing.
+ */
+export interface Picture {
+  id: Id;
+  type: "picture";
+  /** The image itself, as a data URL. */
+  src: string;
+  /** The name of the file it came from. */
+  name: string;
+  /** Its bottom left corner. */
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  /** How strongly it shows, from 0 to 1. Unset: PICTURE_OPACITY. */
+  opacity?: number;
+}
+export const PICTURE_OPACITY = 0.5;
+export type Sym = Support | Frame | CenterMark | Balloon | Fill | Hatch | Datum | Note | AnyLoad | Diagram | Trace | Etalon | RightAngle | Picture;
 
 /** Everything a symbol needs to exist; it is removed when any of these is. */
 export function symbolRefs(s: Sym): Id[] {
@@ -516,6 +589,7 @@ export function symbolRefs(s: Sym): Id[] {
     case "frame": return s.at ? [s.at] : [];
     case "note":
     case "etalon":
+    case "picture":
       return [];
     case "rightangle": return [s.l1, s.l2];
     case "centermark":
@@ -757,7 +831,26 @@ export function dropIfUnused(sk: Sketch, pointId: Id): void {
 export function curvePoints(e: Curve): Id[] {
   if (e.type === "line") return [e.p1, e.p2];
   if (e.type === "circle") return [e.c];
+  if (e.type === "bezier") return [e.p1, e.c1, e.c2, e.p2];
   return [e.c, e.p1, e.p2];
+}
+
+/** The control points of the Bézier curves, each with its curve: they are shown and picked only while it is selected. */
+export function controlPoints(sk: Sketch): Map<Id, Bezier> {
+  const out = new Map<Id, Bezier>();
+  for (const e of sk.entities) if (e.type === "bezier") { out.set(e.c1, e); out.set(e.c2, e); }
+  return out;
+}
+
+export function addBezier(sk: Sketch, p1: Id, c1: Id, c2: Id, p2: Id): Bezier {
+  const b: Bezier = { id: newId(sk, "line"), type: "bezier", p1, c1, c2, p2 };
+  sk.entities.push(b);
+  return b;
+}
+
+/** The ends of a curve, where it can meet others: a circle has none. */
+export function curveEnds(e: Curve): Id[] {
+  return e.type === "circle" ? [] : [e.p1, e.p2];
 }
 
 /** Every entity id a constraint refers to. */
@@ -814,9 +907,17 @@ function pruneLink(c: Link, alive: Set<Id>): Link | null {
 
 export function isFixed(sk: Sketch, pointId: Id): boolean {
   if (pointId === ORIGIN || sk.constraints.some((c) => c.type === "fixed" && c.p === pointId)) return true;
-  // Projected from another sketch, it is where its source is.
+  // Projected from another sketch, it is where its source is; imported, it is where it was put.
   const e = sk.entities.find((x) => x.id === pointId);
-  return e?.type === "point" && !!e.ref;
+  return e?.type === "point" && (!!e.ref || !!e.locked);
+}
+
+/** Every point that cannot move, at once: for loops over many points, where asking isFixed of each would be slow. */
+export function fixedPoints(sk: Sketch): Set<Id> {
+  const out = new Set<Id>([ORIGIN]);
+  for (const c of sk.constraints) if (c.type === "fixed") out.add(c.p);
+  for (const e of sk.entities) if (e.type === "point" && (e.ref || e.locked)) out.add(e.id);
+  return out;
 }
 
 /** True when a line, circle or arc is built on the point. */

@@ -15,8 +15,11 @@ let seed = 12345;
 const rnd = () => { seed = (seed * 1664525 + 1013904223) >>> 0; return seed / 4294967296; };
 const R = (a: number, b: number) => a + (b - a) * rnd();
 
+/** The curves of these sketches, which never hold a Bézier curve. */
+const plainCurves = (sk: Sketch) => curves(sk) as Exclude<Curve, { type: "bezier" }>[];
+
 /** Points sampled along a curve. */
-function sample(sk: Sketch, e: Curve, n = 40): [number, number][] {
+function sample(sk: Sketch, e: Exclude<Curve, { type: "bezier" }>, n = 40): [number, number][] {
   const out: [number, number][] = [];
   if (e.type === "line") { const a = point(sk, e.p1), b = point(sk, e.p2); for (let i = 0; i <= n; i++) out.push([a.x + (b.x - a.x) * i / n, a.y + (b.y - a.y) * i / n]); return out; }
   const c = point(sk, e.c);
@@ -62,8 +65,8 @@ it("leaves a constrained sketch where it was, whatever is trimmed", () => {
     const first = solver.solve(sk);
     if (!first.ok) { note("setup unsolvable"); continue; }
     for (let step = 0; step < 6; step++) {
-      const carriers = curves(sk).map((e) => e.type === "line" ? { kind: "line", a: [point(sk, e.p1).x, point(sk, e.p1).y], b: [point(sk, e.p2).x, point(sk, e.p2).y] } : { kind: "round", c: [point(sk, e.c).x, point(sk, e.c).y], r: e.type === "circle" ? e.r : arcRadius(sk, e) });
-      const list = curves(sk);
+      const carriers = plainCurves(sk).map((e) => e.type === "line" ? { kind: "line", a: [point(sk, e.p1).x, point(sk, e.p1).y], b: [point(sk, e.p2).x, point(sk, e.p2).y] } : { kind: "round", c: [point(sk, e.c).x, point(sk, e.c).y], r: e.type === "circle" ? e.r : arcRadius(sk, e) });
+      const list = plainCurves(sk);
       if (!list.length) break;
       const e = list[Math.floor(rnd() * list.length)];
       const pts = sample(sk, e);
@@ -83,7 +86,7 @@ it("leaves a constrained sketch where it was, whatever is trimmed", () => {
       const fin = solver.solve(sk);
       if (!fin.ok) { note("unsolvable at the end"); break; }
       let worst = 0;
-      for (const c of curves(sk)) for (const q of sample(sk, c, 12)) worst = Math.max(worst, carrierDist(q, carriers));
+      for (const c of plainCurves(sk)) for (const q of sample(sk, c, 12)) worst = Math.max(worst, carrierDist(q, carriers));
       if (worst > 1e-4) note("geometry moved after a trim (" + (plan.whole ? "whole" : e.type) + ")");
     }
   }
@@ -104,9 +107,9 @@ it("removes exactly the piece that was clicked, in sketches of every kind", () =
       else if (k < 0.8) addCircle(sk, addPoint(sk, R(-4, 4), R(-4, 4)).id, R(0.8, 3));
       else { const cx = R(-4, 4), cy = R(-4, 4), r = R(0.8, 3), a0 = R(0, 6.28), a1 = a0 + R(0.5, 5); addArc(sk, addPoint(sk, cx, cy).id, addPoint(sk, cx + r * Math.cos(a0), cy + r * Math.sin(a0)).id, addPoint(sk, cx + r * Math.cos(a1), cy + r * Math.sin(a1)).id); }
     }
-    const carriers = curves(sk).map((e) => e.type === "line" ? { kind: "line", a: [point(sk, e.p1).x, point(sk, e.p1).y], b: [point(sk, e.p2).x, point(sk, e.p2).y] } : { kind: "round", c: [point(sk, e.c).x, point(sk, e.c).y], r: e.type === "circle" ? e.r : arcRadius(sk, e) });
+    const carriers = plainCurves(sk).map((e) => e.type === "line" ? { kind: "line", a: [point(sk, e.p1).x, point(sk, e.p1).y], b: [point(sk, e.p2).x, point(sk, e.p2).y] } : { kind: "round", c: [point(sk, e.c).x, point(sk, e.c).y], r: e.type === "circle" ? e.r : arcRadius(sk, e) });
     for (let step = 0; step < 6; step++) {
-      const list = curves(sk);
+      const list = plainCurves(sk);
       if (!list.length) break;
       const e = list[Math.floor(rnd() * list.length)];
       const pts = sample(sk, e);
@@ -130,10 +133,10 @@ it("removes exactly the piece that was clicked, in sketches of every kind", () =
       if (!fin.ok) note("unsolvable at the end");
       // what is left must still lie on the original carriers
       let worst = 0;
-      for (const c of curves(sk)) for (const q of sample(sk, c, 12)) worst = Math.max(worst, carrierDist(q, carriers));
+      for (const c of plainCurves(sk)) for (const q of sample(sk, c, 12)) worst = Math.max(worst, carrierDist(q, carriers));
       if (worst > 1e-5) note("geometry moved off its original curves");
       // the clicked spot must be gone
-      const still = curves(sk).some((c) => sample(sk, c, 400).some((q) => Math.hypot(q[0] - at[0], q[1] - at[1]) < 1e-3));
+      const still = plainCurves(sk).some((c) => sample(sk, c, 400).some((q) => Math.hypot(q[0] - at[0], q[1] - at[1]) < 1e-3));
       if (still && !plan.whole) {
         // unless another curve passes through the same spot
         const others = carriers.filter((k) => carrierDist(at, [k]) < 1e-3).length;

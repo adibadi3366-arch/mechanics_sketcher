@@ -6,12 +6,12 @@
 // a point at the crossing are not split there, so such regions are not found.
 
 import { type Sketch, type Id, type Point, points, point, curves, curvePoints, arcRadius, isEdge } from "./model";
-import { type V, sub, dist, angleOf, polar, wrap, projectOnSegment, TWO_PI } from "./geom";
+import { type V, type Cubic, sub, dist, angleOf, polar, wrap, projectOnSegment, bezierPoints, TWO_PI } from "./geom";
 
 /** A bounded region: corners in counter-clockwise order, and what joins each to the next. */
 export interface Face {
   points: Id[];
-  /** For each corner, the arc running to the next corner, or null for a straight side. */
+  /** For each corner, the arc or Bézier curve running to the next corner, or null for a straight side. */
   arcs: (Id | null)[];
   curves: Id[];
   /** The outline in model units, with arcs sampled; for area and inside tests. */
@@ -119,6 +119,11 @@ export function findFaces(sk: Sketch): Face[] {
       for (let i = 0; i + 1 < on.length; i++) {
         link(on[i].id, on[i + 1].id, e.id, e.id, arcInner(c, r, a0 + on[i].s, a0 + on[i + 1].s));
       }
+    } else if (e.type === "bezier") {
+      // A Bézier curve joins its two ends only: points cannot be held on one along the way.
+      const q: Cubic = [pos(e.p1), pos(e.c1), pos(e.c2), pos(e.p2)];
+      const node = (id: Id) => reps.find((r) => Math.hypot(r.x - point(sk, id).x, r.y - point(sk, id).y) < eps)?.id ?? id;
+      link(node(e.p1), node(e.p2), e.id, e.id, bezierPoints(q).slice(1, -1));
     }
   }
 
@@ -227,6 +232,8 @@ export interface Overlaps {
 export function findOverlaps(sk: Sketch): Overlaps {
   const out: Overlaps = { segments: [], rounds: [] };
   const drawn = curves(sk).filter(isEdge);
+  // Every pair is compared: past a size, that takes longer than a frame has, and a drawing that big was imported, not drawn.
+  if (drawn.length > 1500) return out;
   const pos = (id: Id): V => { const p = point(sk, id); return [p.x, p.y]; };
 
   const lines = drawn.filter((e) => e.type === "line").map((e) => ({ a: pos((e as { p1: Id }).p1), b: pos((e as { p2: Id }).p2) }));

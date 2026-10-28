@@ -3,7 +3,7 @@
 import { GcsWrapper, SolveStatus, DebugMode, Algorithm, type SketchPrimitive } from "@salusoft89/planegcs";
 import {
   type Sketch, type Id, type Constraint, type Entity, type Link, type HalfPair,
-  ORIGIN, entity, point, isFixed, arcRadius, unitScale,
+  ORIGIN, entity, point, isFixed, fixedPoints, arcRadius, unitScale,
 } from "./model";
 import { type V, sub, dot, cross, norm, perp } from "./geom";
 
@@ -44,7 +44,7 @@ function geometryPrims(sk: Sketch): Prim[] {
   for (const e of sk.entities) {
     if (e.type === "point") {
       // Projected from another sketch, a point is where its source is.
-      out.push({ id: e.id, type: "point", x: e.x, y: e.y, fixed: fixed.has(e.id) || !!e.ref });
+      out.push({ id: e.id, type: "point", x: e.x, y: e.y, fixed: fixed.has(e.id) || !!e.ref || !!e.locked });
     }
   }
   for (const e of sk.entities) {
@@ -184,7 +184,7 @@ function constraintPrims(sk: Sketch, c: Constraint, params: FreeParam[]): Prim[]
   // Lengths are dimensioned in the sketch's units; the geometry is in its own.
   const length = (v: number) => v / unitScale(sk);
   // A measure reads the geometry and holds nothing.
-  if ((c.type === "distance" || c.type === "angle" || c.type === "radius") && c.measure) return [];
+  if ((c.type === "distance" || c.type === "angle" || c.type === "radius") && (c.measure || c.driven)) return [];
   switch (c.type) {
     case "mirror":
     case "shift":
@@ -280,7 +280,7 @@ function constraintPrims(sk: Sketch, c: Constraint, params: FreeParam[]): Prim[]
 /** Projected circles keep the size of their source: nothing in this sketch can change it. */
 function projectionLocks(sk: Sketch): Prim[] {
   const out: Prim[] = [];
-  for (const e of sk.entities) if (e.type === "circle" && e.ref) out.push({ id: `${e.id}:ref`, type: "circle_radius", c_id: e.id, radius: e.r });
+  for (const e of sk.entities) if (e.type === "circle" && (e.ref || e.locked)) out.push({ id: `${e.id}:ref`, type: "circle_radius", c_id: e.id, radius: e.r });
   return out;
 }
 
@@ -403,7 +403,8 @@ export class SketchSolver {
     if (!first.ok) return null;
     const out: Freedom = { points: new Set(), radii: new Set() };
     if (first.dof <= 0) return out;
-    const pts = sk.entities.filter((e): e is Extract<Entity, { type: "point" }> => e.type === "point" && !isFixed(sk, e.id));
+    const fixed = fixedPoints(sk);
+    const pts = sk.entities.filter((e): e is Extract<Entity, { type: "point" }> => e.type === "point" && !fixed.has(e.id));
     const circles = sk.entities.filter((e): e is Extract<Entity, { type: "circle" }> => e.type === "circle");
     if (!pts.length && !circles.length) return out;
     // How far to pull, and how far counts as having moved, from the size of the sketch.

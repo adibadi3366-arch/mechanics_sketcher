@@ -4,27 +4,27 @@
 import {
   type Sketch, type Id, type Point, type Line, type Circle, type Arc, type Curve, type Constraint,
   type ConstraintDraft, type Dimension, type DistanceMode, type Sym, type SupportKind, type LeaderEnd,
-  type ArrowEnds, type Datum, type BalloonFrame, type AnyLoad, type LoadKind, type Diagram, type Plot, isLoad, loadKind, geometryExtent,
-  type LineElement, type ElementLook, type Entity, isNamed, arcAngles, newId,
+  type ArrowEnds, type Datum, type BalloonFrame, HATCH_GAP, PICTURE_OPACITY, type AnyLoad, type LoadKind, type Diagram, type Plot, isLoad, loadKind, geometryExtent,
+  type LineElement, type ElementLook, type Entity, type Bezier, isNamed, arcAngles, newId, controlPoints, addBezier,
   ORIGIN, emptySketch, entity, point, constraint, symbol, symbolRefs, points, curves, curvePoints,
-  constraintRefs, isDimension, isLengthDimension, unitScale, isLink, isFixed, arcRadius, addPoint, addLine, addCircle, addArc, addConstraint,
+  constraintRefs, isDimension, isLengthDimension, unitScale, fixedPoints, isLink, isFixed, arcRadius, addPoint, addLine, addCircle, addArc, addConstraint,
   addSupport, addFrame, addSymbol, remove, serialize, deserialize, clone,
 } from "./model";
 import { SketchSolver, type Drag, type SolveResult, type Freedom } from "./solver";
 import { History } from "./history";
 import {
   type V, add, sub, mul, dot, cross, norm, perp, mid, dist, angleOf, polar, wrap, inSweep,
-  type Box, projectOnSegment, intersectLines, distToSegment, boxIsEmpty, grow, TWO_PI,
+  type Box, projectOnSegment, intersectLines, distToSegment, boxIsEmpty, grow, TWO_PI, bezierNearest,
 } from "./geom";
 import {
   type Prim, PAPER, PT_MM, printMm, geometryBox, buildPrims, dimensionPrims,
   primDistance, textCentre, distanceFrame, angleFrame, roundFrame, symbolPosition, balloonAnchor, measuredValue, measuredDimValue, settleLengthScale,
   curveParam, sideOfCurve, formatNumber, frameTips, arrowLabelAt, arrowAnchor, centerMarkEnds, etalonEnds, rightAngleFrame,
-  centerMarkDashes, curveLength, hatchCount, standardWeight, loadScaleOf, loadLabel, loadReach, lineLoadFrame,
+  centerMarkDashes, curveLength, hatchCount, standardWeight, bezierOf, loadScaleOf, loadLabel, loadReach, lineLoadFrame,
 } from "./prims";
 import {
   type View, type Glyph, type Preview, type SnapMark, GLYPH_SIZE, PREVIEW_REF, toScreen, toModel,
-  layoutGlyphs, renderScene,
+  layoutGlyphs, renderScene, imageUrl,
 } from "./render";
 import { regionAt, findOverlaps } from "./regions";
 import { type TrimPlan, planTrim, applyTrim, strokeHits } from "./trim";
@@ -33,6 +33,8 @@ import { type FittedFigure, FIGURE_MARGIN, toSvg, toTikz, fitFigure } from "./ex
 import { icon } from "./icons";
 import { showTexFields } from "./texfield";
 import { numberBox, showInBox } from "./slidernum";
+import { packDrawing, svgWithDrawing, texWithDrawing, readOpened, EMPTY_SVG } from "./embed";
+import { type ImportStyle, importSvg } from "./svgimport";
 import { type Drawing, type Part, splitDrawing, mergeDrawing, activePart, shareSettings, entityIndex, followSources, isOrphan } from "./parts";
 import { BETA, EXPORT_WAIT_SECONDS, NEWS_ID, REPORT_EMAIL, SUPPORT_URL } from "./config";
 import { news } from "./news";
@@ -44,7 +46,7 @@ import { baseline, beamAxis, diagramShape, plotPeak, traceShape, traceReach } fr
 import { defaultLook, lookOf, elementLength, springTurns } from "./element";
 
 type DrawTool =
-  | "point" | "line" | "centerline" | "arrow" | "arcarrow" | "circle" | "arc" | "beam" | "arcbeam"
+  | "point" | "line" | "centerline" | "arrow" | "arcarrow" | "circle" | "arc" | "bezier" | "beam" | "arcbeam"
   /** A line or an arc drawn as something else: a spring, a damper, a spiral spring, a damper bent round a joint. */
   | "spring" | "damper" | "spiral" | "arcdamper";
 /** Tools that take two clicks and make a line between them. */
@@ -88,6 +90,8 @@ interface Snap {
 type Pending =
   | { tool: "line"; start: Snap }
   | { tool: "circle"; center: Snap }
+  /** A Bézier curve: its two ends are clicked, then how it bends. */
+  | { tool: "bezier"; a: Snap; b?: Snap }
   | { tool: "arc"; center: Snap; start?: Snap; sweep: number; lastAng: number }
   /** A beam: its two centres are clicked first, then how wide it is. */
   | { tool: "beam"; a: Snap; b?: Snap }
@@ -168,6 +172,7 @@ const TOOLS: ToolDef[] = [
   { id: "centerline", label: "Centre line", icon: "centerline", tab: "sketch", group: 1 },
   { id: "circle", label: "Circle", key: "C", icon: "circle", tab: "sketch", group: 1 },
   { id: "arc", label: "Arc", key: "A", icon: "arc", tab: "sketch", group: 1 },
+  { id: "bezier", label: "Bézier curve", short: "Bézier", icon: "bezier", tab: "sketch", group: 1 },
   { id: "point", label: "Point", key: "P", icon: "point", tab: "sketch", group: 1 },
   { id: "beam", label: "Beam", icon: "beam", tab: "sketch", group: 1 },
   { id: "arcbeam", label: "Curved beam", short: "Curved", icon: "arcbeam", tab: "sketch", group: 1 },
@@ -363,6 +368,8 @@ export class App {
   private freedom: Freedom | null = null;
   private freedomStale = true;
   private fillColor = FILL_COLORS[0];
+  /** How the next fill is filled, as the last one was: colour, hatching, or both. */
+  private fillLook: "color" | "hatch" | "both" = "color";
   private beamEnds: BeamEnds = "round";
   /** Construction is switched on: the lines, circles and arcs drawn are construction lines, left out of the figure. */
   private constructing = false;
@@ -859,6 +866,7 @@ export class App {
       at = [tips.x, tips.y].filter((t): t is V => t !== null);
     } else if (s.type === "centermark") at = centerMarkEnds(this.sk, s, mm);
     else if (s.type === "etalon") at = [etalonEnds(s, mm)[1]];
+    else if (s.type === "picture") at = [[(s.x + s.w) * mm, (s.y + s.h) * mm]];
     else if (s.type === "balloon" && Math.hypot(s.dx, s.dy) > 1e-12) at = [mul(balloonAnchor(this.sk, s), mm)];
     else if (s.type === "lineload") {
       const f = lineLoadFrame(this.sk, s, mm);
@@ -951,6 +959,7 @@ export class App {
         return `Click a line, an arc or a side of a beam to lay the plot along it, on the side positive values should go${param ? ", or a point to draw its parametric curves about" : ""}. ${done}`;
       }
       case "circle": return p ? "Click to set the radius." : `Click the centre. ${done}`;
+      case "bezier": return p?.tool === "bezier" ? (p.b ? "Move the pointer to bend the curve, and click. Select it later to drag its control points." : "Click where the curve ends.") : `Click where the curve starts. ${done}`;
       case "arc":
       case "arcarrow":
       case "arcdamper": {
@@ -1011,6 +1020,19 @@ export class App {
       const raw = toModel(this.view, this.cursor);
       pv.lines.push([p.anchor.pos, raw]);
       pv.circles.push({ c: raw, r: PAPER.balloonRadius / this.mm() });
+      return pv;
+    }
+    if (p.tool === "bezier") {
+      if (!p.a.pointId) pv.points.push(p.a.pos);
+      if (!p.b) {
+        pv.lines.push([p.a.pos, snap.pos]);
+        return pv;
+      }
+      if (!p.b.pointId) pv.points.push(p.b.pos);
+      const q = this.bezierThrough(p.a.pos, p.b.pos, toModel(this.view, this.cursor));
+      pv.beziers = [q];
+      // The lines to the control points, as on a selected curve.
+      pv.lines.push([q[0], q[1]], [q[3], q[2]]);
       return pv;
     }
     if (p.tool === "beam") {
@@ -1104,7 +1126,11 @@ export class App {
       if (!old || rank < old.rank || (rank === old.rank && d < old.d)) found.set(h.id, { ...h, rank, d });
     };
 
+    // A Bézier curve's control points can be picked while they show: while it, or one of them, is selected.
+    const controls = controlPoints(this.sk);
     for (const p of points(this.sk)) {
+      const bz = controls.get(p.id);
+      if (bz && !this.selection.has(bz.id) && !this.selection.has(bz.c1) && !this.selection.has(bz.c2)) continue;
       const d = dist(toScreen(this.view, [p.x, p.y]), sp);
       if (d < POINT_TOL) offer({ id: p.id, kind: "point" }, 0, d);
     }
@@ -1199,9 +1225,20 @@ export class App {
   }
 
   /** The point a drawing tool's next click is measured from, for H/V inference. */
+  /**
+   * A Bézier curve from a to b that bends through m, as a parabola would:
+   * its control points are where the tangents at the ends meet the
+   * pointer's pull. Dragging them afterwards gives any other shape.
+   */
+  private bezierThrough(a: V, b: V, m: V): [V, V, V, V] {
+    const q = sub(mul(m, 2), mid(a, b));
+    return [a, add(a, mul(sub(q, a), 2 / 3)), add(b, mul(sub(q, b), 2 / 3)), b];
+  }
+
   private snapAnchor(): V | undefined {
     const p = this.pending;
     if (p?.tool === "line") return p.start.pos;
+    if (p?.tool === "bezier" && !p.b) return p.a.pos;
     if (p?.tool === "beam" && !p.b) return p.a.pos;
     return undefined;
   }
@@ -1212,7 +1249,10 @@ export class App {
 
     let bestD = POINT_TOL;
     let hitPoint: Point | null = null;
+    const controls = controlPoints(this.sk);
     for (const p of points(this.sk)) {
+      // A Bézier curve's control points are its own: nothing else snaps to them.
+      if (controls.has(p.id)) continue;
       const d = dist(toScreen(this.view, [p.x, p.y]), sp);
       if (d < bestD) { bestD = d; hitPoint = p; }
     }
@@ -1232,7 +1272,8 @@ export class App {
         const nearMid = dist(pr.point, m) * this.view.scale < 9;
         bestCurveD = d;
         bestCurve = nearMid ? { pos: m, curveId: e.id, midpoint: true } : { pos: pr.point, curveId: e.id };
-      } else {
+      } else if (e.type !== "bezier") {
+        // A point cannot be held on a Bézier curve, so nothing snaps onto one but at its ends.
         const c = point(this.sk, e.c);
         const C: V = [c.x, c.y];
         const r = e.type === "circle" ? e.r : arcRadius(this.sk, e);
@@ -1390,6 +1431,28 @@ export class App {
         return;
       }
       return this.makeArcBeam(p, toModel(this.view, sp));
+    }
+
+    if (this.tool === "bezier") {
+      if (!p || p.tool !== "bezier") {
+        this.pending = { tool: "bezier", a: snap };
+        return;
+      }
+      if (!p.b) {
+        const same = snap.pointId !== undefined && snap.pointId === p.a.pointId;
+        if (same || dist(toScreen(this.view, p.a.pos), toScreen(this.view, snap.pos)) < 3) return; // no length yet
+        p.b = snap;
+        return;
+      }
+      const [, c1, c2] = this.bezierThrough(p.a.pos, p.b.pos, toModel(this.view, sp));
+      const a = this.materialize(p.a, autos), b = this.materialize(p.b, autos);
+      const k1 = addPoint(this.sk, c1[0], c1[1]).id, k2 = addPoint(this.sk, c2[0], c2[1]).id;
+      const curve = addBezier(this.sk, a, k1, k2, b);
+      if (this.constructing) curve.construction = true;
+      this.pending = null;
+      this.finishDrawing(autos);
+      this.selection = new Set([curve.id]);
+      return;
     }
 
     if (this.tool === "circle") {
@@ -1680,6 +1743,10 @@ export class App {
       const a = S(xy(e.p1)), b = S(xy(e.p2));
       return `M${a[0].toFixed(1)} ${a[1].toFixed(1)}L${b[0].toFixed(1)} ${b[1].toFixed(1)}`;
     }
+    if (e.type === "bezier") {
+      const [a, b, c, d] = [e.p1, e.c1, e.c2, e.p2].map((id) => S(xy(id)).map((v) => v.toFixed(1)).join(" "));
+      return `M${a}C${b} ${c} ${d}`;
+    }
     const c = S(xy(e.c));
     if (e.type === "circle") {
       const r = (e.r * this.view.scale).toFixed(1);
@@ -1696,6 +1763,15 @@ export class App {
     const parts = this.drawing.parts;
     const here = parts.findIndex((p) => p.info.id === this.drawing.active);
     let out = "";
+    // Pictures first, under every line.
+    parts.forEach((p, i) => {
+      if (i === here || p.info.hidden) return;
+      for (const s of p.sk.symbols) {
+        if (s.type !== "picture") continue;
+        const tl = toScreen(this.view, [s.x, s.y + s.h]);
+        out += `<image class="picture" href="${imageUrl(s.src)}" x="${tl[0].toFixed(1)}" y="${tl[1].toFixed(1)}" width="${(s.w * this.view.scale).toFixed(1)}" height="${(s.h * this.view.scale).toFixed(1)}" opacity="${s.opacity ?? PICTURE_OPACITY}" preserveAspectRatio="none"/>`;
+      }
+    });
     parts.forEach((p, i) => {
       if (i === here || p.info.hidden) return;
       const pickable = this.tool === "project" && i < here;
@@ -1741,6 +1817,7 @@ export class App {
         if (e.type === "point" || e.construction) continue;
         let d: number;
         if (e.type === "line") d = distToSegment(sp, S(e.p1), S(e.p2));
+        else if (e.type === "bezier") d = bezierNearest(bezierOf(sk, e), toModel(this.view, sp)).d * this.view.scale;
         else {
           const c = S(e.c), r = (e.type === "circle" ? e.r : arcRadius(sk, e)) * this.view.scale;
           d = Math.abs(dist(sp, c) - r);
@@ -1786,6 +1863,7 @@ export class App {
     } else {
       const made = src.type === "line" ? addLine(sk, pointFor(src.p1), pointFor(src.p2))
         : src.type === "circle" ? addCircle(sk, pointFor(src.c), src.r)
+        : src.type === "bezier" ? addBezier(sk, pointFor(src.p1), pointFor(src.c1), pointFor(src.c2), pointFor(src.p2))
         : addArc(sk, pointFor(src.c), pointFor(src.p1), pointFor(src.p2));
       made.construction = true;
       made.ref = src.id;
@@ -1859,18 +1937,117 @@ export class App {
 
   /** Starts a new sketch after the others, and works on it. */
   private addSketch(): void {
+    this.makeSketch();
+    this.commit();
+    this.showTip("sketches");
+  }
+
+  /** Makes a new, empty sketch after the others and works on it. Named "Sketch n" unless it is given a name. */
+  private makeSketch(name?: string): void {
     activePart(this.drawing).sk = this.sk;
     const taken = new Set(this.drawing.parts.map((p) => p.info.name));
     let n = this.drawing.parts.length + 1;
     while (taken.has(`Sketch ${n}`)) n++;
     const sk = { entities: [this.sk.entities.find((e) => e.id === ORIGIN)!], constraints: [], symbols: [] } as unknown as Sketch;
     shareSettings(this.sk, sk);
-    const info = { id: newId(this.sk, "sketch"), name: `Sketch ${n}` };
+    const info = { id: newId(this.sk, "sketch"), name: name ?? `Sketch ${n}` };
     sk.nextId = this.sk.nextId;
     this.drawing.parts.push({ info, sk });
     this.openSketch(info.id);
+  }
+
+  /**
+   * Brings in a picture to trace over, in a sketch of its own: it shows under
+   * the other sketches while they are worked on, and is never part of the
+   * figure. A very large picture is brought down to a size the browser keeps
+   * comfortably.
+   */
+  private async importPicture(file: File): Promise<void> {
+    const read = (f: Blob) => new Promise<string>((ok, fail) => {
+      const r = new FileReader();
+      r.onload = () => ok(String(r.result));
+      r.onerror = () => fail(new Error("That picture could not be read."));
+      r.readAsDataURL(f);
+    });
+    const load = (src: string) => new Promise<HTMLImageElement>((ok, fail) => {
+      const img = new Image();
+      img.onload = () => ok(img);
+      img.onerror = () => fail(new Error("That picture could not be shown."));
+      img.src = src;
+    });
+    let src = await read(file);
+    let img = await load(src);
+    const MAX = 2400;
+    if (Math.max(img.naturalWidth, img.naturalHeight) > MAX) {
+      const k = MAX / Math.max(img.naturalWidth, img.naturalHeight);
+      const canvas = document.createElement("canvas");
+      canvas.width = Math.round(img.naturalWidth * k);
+      canvas.height = Math.round(img.naturalHeight * k);
+      canvas.getContext("2d")!.drawImage(img, 0, 0, canvas.width, canvas.height);
+      src = canvas.toDataURL(file.type === "image/png" ? "image/png" : "image/jpeg", 0.88);
+      img = await load(src);
+    }
+    const name = file.name.replace(/\.[a-z0-9]+$/i, "");
+    this.makeSketch(`Picture: ${name}`);
+    // Most of the view wide, in the middle of it.
+    const w = (this.view.w * 0.7) / this.view.scale, h = (w * img.naturalHeight) / Math.max(1, img.naturalWidth);
+    const pic = addSymbol(this.sk, { type: "picture", src, name: file.name, x: this.view.cx - w / 2, y: this.view.cy - h / 2, w, h });
+    this.setTool("select");
+    this.selection = new Set([pic.id]);
     this.commit();
-    this.showTip("sketches");
+    this.showTip("picture");
+  }
+
+  /**
+   * Brings in the lines, arcs, circles and curves of an SVG drawing, such as
+   * one exported from a CAD program, as a sketch of their own: fixed where
+   * they are, so they can be dimensioned (the dimensions are driven), filled
+   * and hatched, and projected into other sketches.
+   */
+  private importDrawing(text: string, fileName: string): void {
+    const d = importSvg(text);
+    const count = d.lines.length + d.arcs.length + d.circles.length + d.beziers.length;
+    const left = [...d.skipped].map(([what, n]) => `${n} ${what}`).join(", ");
+    if (!count) return this.toast(`There are no drawn lines in that SVG to bring in${left ? `; left out: ${left}` : ""}.`);
+    this.makeSketch(`Drawing: ${fileName.replace(/\.svg$/i, "")}`);
+    const sk = this.sk;
+    const ids = d.points.map(([x, y], i) => {
+      const p = addPoint(sk, x, y, d.crossings.has(i));
+      p.locked = true;
+      return p.id;
+    });
+    const dress = (e: Curve, s: ImportStyle) => {
+      if (s.color) e.color = s.color;
+      if (s.weight !== undefined) e.weight = Math.max(0.1, Math.min(3, s.weight));
+      if (s.centre) e.centre = true;
+      else if (s.dashed) e.dashed = true;
+    };
+    for (const l of d.lines) dress(addLine(sk, ids[l.a], ids[l.b]), l.style);
+    for (const a of d.arcs) dress(addArc(sk, ids[a.c], ids[a.p1], ids[a.p2]), a.style);
+    for (const c of d.circles) {
+      const circle = addCircle(sk, ids[c.c], c.r);
+      circle.locked = true;
+      dress(circle, c.style);
+    }
+    for (const b of d.beziers) dress(addBezier(sk, ids[b.p1], ids[b.c1], ids[b.c2], ids[b.p2]), b.style);
+    this.setTool("select");
+    this.solve();
+    this.commit();
+    this.fit();
+    const made = [[d.lines.length, "line"], [d.arcs.length, "arc"], [d.circles.length, "circle"], [d.beziers.length, "curve"]]
+      .filter(([n]) => n).map(([n, w]) => `${n} ${w}${n === 1 ? "" : "s"}`).join(", ");
+    this.toast(`Brought in ${made}${left ? `. Left out: ${left}` : ""}.`);
+    this.showTip("imported");
+  }
+
+  /** Pulls the top right corner of a picture: it grows or shrinks about its bottom left corner, keeping its shape. */
+  private dragPictureCorner(id: Id, sp: V): void {
+    const s = symbol(this.sk, id);
+    if (s?.type !== "picture") return;
+    const q = toModel(this.view, sp);
+    const w = Math.max((q[0] - s.x + ((q[1] - s.y) * s.w) / s.h) / 2, 8 / this.view.scale);
+    s.h = (s.h * w) / s.w;
+    s.w = w;
   }
 
   /** Deletes the sketch being worked on. What later sketches projected from it stays where it was, as their own. */
@@ -2130,14 +2307,18 @@ export class App {
         ? f.circle === region.circle
         : !f.circle && f.points.length === region.face.points.length && region.face.points.every((id) => f.points.includes(id)));
       const existing = this.sk.symbols.find(same);
+      const look = this.fillLook === "color" ? {} : { look: this.fillLook };
       if (existing && existing.type === "fill") {
-        existing.color = this.fillColor; // filling a filled shape recolours it
+        // Filling a filled shape fills it again, as the fill in hand does.
+        existing.color = this.fillColor;
+        if (this.fillLook === "color") delete existing.look;
+        else existing.look = this.fillLook;
         this.selection = new Set([existing.id]);
         return this.commit();
       }
       const f = region.kind === "circle"
-        ? addSymbol(this.sk, { type: "fill", color: this.fillColor, circle: region.circle, points: [], arcs: [], curves: [], holes: [] })
-        : addSymbol(this.sk, { type: "fill", color: this.fillColor, points: region.face.points, arcs: region.face.arcs, curves: region.face.curves, holes: region.holes });
+        ? addSymbol(this.sk, { type: "fill", color: this.fillColor, circle: region.circle, points: [], arcs: [], curves: [], holes: [], ...look })
+        : addSymbol(this.sk, { type: "fill", color: this.fillColor, points: region.face.points, arcs: region.face.arcs, curves: region.face.curves, holes: region.holes, ...look });
       this.selection = new Set([f.id]);
       return this.commit();
     }
@@ -2438,7 +2619,7 @@ export class App {
       s.side = off >= 0 ? 1 : -1;
       const whole = curveLength(this.sk, s.on);
       s.depth = Math.max(whole * HATCH_REACH[0], Math.min(whole * HATCH_REACH[1], Math.abs(off)));
-    } else if (s.type === "note" || s.type === "etalon") {
+    } else if (s.type === "note" || s.type === "etalon" || s.type === "picture") {
       const pos = add(d.origin, sub(m, d.startModel));
       s.x = pos[0];
       s.y = pos[1];
@@ -2642,7 +2823,7 @@ export class App {
     }
     // And the far end of a selected etalon, and the tip of a selected balloon's leader.
     if (chosen && !ev.shiftKey && this.gripsAt(sp)) {
-      if (chosen.type === "etalon") this.drag = { kind: "stretch", id: chosen.id, startScreen: sp, moved: false };
+      if (chosen.type === "etalon" || chosen.type === "picture") this.drag = { kind: "stretch", id: chosen.id, startScreen: sp, moved: false };
       else if (chosen.type === "balloon") this.drag = { kind: "tip", id: chosen.id, startScreen: sp, centre: add(balloonAnchor(this.sk, chosen), [chosen.dx, chosen.dy]), moved: false };
       if (this.drag) return this.touch();
     }
@@ -2767,7 +2948,8 @@ export class App {
     } else if (d?.kind === "stretch") {
       if (!d.moved && dist(sp, d.startScreen) < 3) return;
       d.moved = true;
-      this.dragEtalonEnd(d.id, sp);
+      if (symbol(this.sk, d.id)?.type === "picture") this.dragPictureCorner(d.id, sp);
+      else this.dragEtalonEnd(d.id, sp);
       this.chromeDirty = true;
     } else if (d?.kind === "span") {
       if (!d.moved && dist(sp, d.startScreen) < 3) return;
@@ -3151,6 +3333,14 @@ export class App {
       this.touch();
       return;
     }
+    // Of geometry that cannot move, a dimension can only say what it measures.
+    if (this.allFixed(draft)) {
+      const d = addConstraint(this.sk, { ...draft, driven: true } as ConstraintDraft);
+      this.commit();
+      this.selection = new Set([d.id]);
+      this.openDimEditor(d.id);
+      return this.touch();
+    }
     const made = this.addManual([draft], "That dimension would over-constrain the sketch.");
     if (!made) {
       if (isCommand(this.tool)) this.selection.clear();
@@ -3161,13 +3351,27 @@ export class App {
     this.touch();
   }
 
+  /** True when nothing a dimension would measure can move: then it can only be driven. */
+  private allFixed(draft: ConstraintDraft): boolean {
+    const fixed = fixedPoints(this.sk);
+    const ends = (id: Id): Id[] => { const e = entity(this.sk, id); return e && e.type !== "point" ? curvePoints(e) : [id]; };
+    if (draft.type === "distance") return [draft.a, ...ends(draft.b)].every((id) => fixed.has(id));
+    if (draft.type === "angle") return [...ends(draft.l1), ...ends(draft.l2)].every((id) => fixed.has(id));
+    if (draft.type === "radius") {
+      const e = entity(this.sk, draft.target);
+      if (e?.type === "circle") return fixed.has(e.c) && !!(e.ref || e.locked);
+      return e?.type === "arc" && curvePoints(e).every((id) => fixed.has(id));
+    }
+    return false;
+  }
+
   private placeDimension(sp: V): void {
     this.createDimension(toModel(this.view, sp));
   }
 
   /** The number shown to the user: degrees for angles, plain value otherwise. A measure shows what it measures now. */
   private shownValue(d: Dimension): string {
-    const v = d.measure ? measuredDimValue(this.sk, d) : d.value;
+    const v = d.measure || d.driven ? measuredDimValue(this.sk, d) : d.value;
     return formatNumber(d.type === "angle" ? v / DEG : v);
   }
 
@@ -3189,6 +3393,19 @@ export class App {
       return false;
     }
     if (Math.abs(v - d.value) < 1e-12) return true;
+    if (d.driven) {
+      // A driven dimension moves nothing. As the only length dimension it says what the drawing is worth.
+      const drawn = measuredValue(this.sk, d);
+      if (isLengthDimension(d) && this.allConstraints().filter(isLengthDimension).length === 1 && drawn > 1e-12) {
+        d.value = v;
+        this.sk.lengthScale = v / drawn;
+        this.toast("The first dimension sets the scale: every other dimension of the drawing now reads in these units.");
+        this.commit();
+        return true;
+      }
+      this.toast("This dimension is of fixed geometry, so it shows what that measures and cannot change it. Type a label to show text instead.");
+      return false;
+    }
 
     const before = clone(this.sk);
     const old = d.value;
@@ -3392,11 +3609,12 @@ export class App {
   // ---- constraint commands ------------------------------------------------------
 
   private picked() {
-    const pts: Point[] = [], lines: Line[] = [], rounds: (Circle | Arc)[] = [], cons: Constraint[] = [], syms: Sym[] = [];
+    const pts: Point[] = [], lines: Line[] = [], rounds: (Circle | Arc)[] = [], beziers: Bezier[] = [], cons: Constraint[] = [], syms: Sym[] = [];
     for (const id of this.selection) {
       const e = entity(this.sk, id);
       if (e?.type === "point") pts.push(e);
       else if (e?.type === "line") lines.push(e);
+      else if (e?.type === "bezier") beziers.push(e);
       else if (e) rounds.push(e);
       else {
         const c = constraint(this.sk, id);
@@ -3405,12 +3623,14 @@ export class App {
         if (s) syms.push(s);
       }
     }
-    return { pts, lines, rounds, cons, syms, entities: pts.length + lines.length + rounds.length };
+    return { pts, lines, rounds, beziers, cons, syms, entities: pts.length + lines.length + rounds.length + beziers.length };
   }
 
   /** True when the picked geometry is exactly what the command needs. */
   private canApply(cmd: Command): boolean {
-    const { pts, lines, rounds } = this.picked();
+    const { pts, lines, rounds, beziers } = this.picked();
+    // No constraint or dimension takes a Bézier curve; only its points.
+    if (beziers.length) return false;
     const P = pts.length, L = lines.length, R = rounds.length;
     switch (cmd) {
       case "horizontal":
@@ -3634,9 +3854,14 @@ export class App {
     this.fit();
   }
 
-  /** Saves the sketch to a file, asking where it should go and what it should be called. */
-  private save(): void {
-    void this.saveAs(serialize(this.whole()), ".json", "application/json", "Mech Sketch drawing", "sketch");
+  /**
+   * Saves the drawing, asking where it should go and what it should be called.
+   * The file is an SVG of the figure with the drawing inside it: a picture
+   * anything can show, which Mech Sketch opens again with everything in it.
+   */
+  private async save(): Promise<void> {
+    const packed = await packDrawing(JSON.stringify(this.whole()));
+    void this.saveAs(svgWithDrawing(toSvg(this.figureSketch()) ?? EMPTY_SVG, packed), ".svg", "image/svg+xml", "Mech Sketch drawing (SVG)", "sketch");
   }
 
   private download(name: string, text: string, type: string): void {
@@ -3756,8 +3981,13 @@ export class App {
   private async exportFigure(how: "svg" | "tikz" | "copy-tikz"): Promise<void> {
     // Each workspace exports what it shows: the figure, or the plot.
     const plotting = this.tab === "plot";
-    const text = plotting ? this.plots.exported(how === "svg" ? "svg" : "tikz") : how === "svg" ? toSvg(this.figureSketch()) : toTikz(this.figureSketch());
+    let text = plotting ? this.plots.exported(how === "svg" ? "svg" : "tikz") : how === "svg" ? toSvg(this.figureSketch()) : toTikz(this.figureSketch());
     if (!text) return this.toast(plotting ? "There is no plot to export yet." : "There is nothing to export yet.");
+    // A figure saved to a file carries its drawing, so opening the file brings back everything; a copy for pasting does not.
+    if (!plotting && how !== "copy-tikz") {
+      const packed = await packDrawing(JSON.stringify(this.whole()));
+      text = how === "svg" ? svgWithDrawing(text, packed) : texWithDrawing(text, packed);
+    }
     const title = how === "svg" ? "Export SVG" : how === "tikz" ? "Export TikZ" : "Copy TikZ";
     if (!(await this.waitToExport(title, how === "copy-tikz" ? "Copy" : "Save"))) return;
     const slot: SaveSlot = plotting ? "plot" : "figure";
@@ -3782,9 +4012,15 @@ export class App {
 
   private async open(file: File): Promise<void> {
     try {
-      const sk = deserialize(await file.text());
+      // A picture comes in to trace over.
+      if (/^image\/(png|jpeg|gif|webp|bmp)$/.test(file.type) || /\.(png|jpe?g|gif|webp|bmp)$/i.test(file.name)) return await this.importPicture(file);
+      const got = await readOpened(await file.text());
+      if (got.kind === "none") return this.toast(got.why);
+      // Any other SVG is a drawing to annotate: its lines come in as a sketch of their own.
+      if (got.kind === "svg") return this.importDrawing(await file.text(), file.name);
+      const sk = deserialize(got.json);
       // Saved again, it is offered its own name.
-      const name = file.name.replace(/\.json$/i, "").trim();
+      const name = file.name.replace(/\.(json|svg|tex)$/i, "").trim();
       if (name) {
         this.sketchName = name;
         try { localStorage.setItem(SKETCH_NAME_KEY, name); } catch { /* storage unavailable */ }
@@ -4145,6 +4381,14 @@ export class App {
         html += `<p class="muted note-block">Drag the balloon to move it; its leader keeps pointing at the same spot. Drag the handle at the tip of the leader to point it at something else: a joint, a spot on a curve, or anywhere.</p>`;
         break;
       }
+      case "picture": {
+        html += `<h2>Picture to trace over</h2>`;
+        html += `<p class="muted note-block">${esc(s.name)}. It is shown under the other sketches while you work on them, and never in the figure. Drag it to move it and its top right corner to scale it. There is no need to scale it to size: the first dimension you give what you trace sets the scale.</p>`;
+        const pct = Math.round((s.opacity ?? PICTURE_OPACITY) * 100);
+        html += slider("Strength", "sym-opacity", 10, 100, 5, pct, `${pct} %`, "How strongly it shows. Faint is easier to trace over.");
+        html += number("Width (in the drawing's units)", "sym-width", this.inUnits(s.w, 6));
+        break;
+      }
       case "etalon":
         html += `<h2>Etalon</h2>`;
         html += text("Name", "sym-label", s.label, "What the bar is worth, as TeX math: 1\\,\\mathrm{m}, or 10\\,\\mathrm{kN} for forces drawn at a scale. Left empty, it shows its length in the drawing's units. Clicking it on the drawing edits it there.", true);
@@ -4174,6 +4418,22 @@ export class App {
           `<button type="button" class="swatch" data-color="${c}" aria-pressed="${s.color === c}" aria-label="Colour ${c}" title="${c}" style="background:${c}"></button>`).join("")}` +
           `<label class="swatch custom" title="Another colour"><input data-field="sym-color" type="color" value="${esc(s.color)}" aria-label="Another colour"></label></div></div>`;
         if (s.holes.length) html += `<p class="muted note-block">${s.holes.length === 1 ? "The circle inside is" : "The circles inside are"} left unfilled.</p>`;
+        {
+          const look = s.look ?? "color";
+          html += `<div class="field"><span id="look-label">Filled with</span><div class="segmented" role="group" aria-labelledby="look-label">` +
+            ([["color", "Colour"], ["hatch", "Hatching"], ["both", "Both"]] as const).map(([v, name]) =>
+              `<button type="button" data-filllook="${v}" aria-pressed="${look === v}">${name}</button>`).join("") + `</div>` +
+            `<small>Hatching is drawn as a cut is: thin strokes across the shape, black over the colour or on their own. The next fill you make is filled the same way.</small></div>`;
+          if (s.look) {
+            const deg = Math.round(((s.hatchAngle ?? Math.PI / 4) * 180) / Math.PI * 100) / 100;
+            html += `<div class="field"><span id="hangle-label">Strokes lean</span><div class="segmented" role="group" aria-labelledby="hangle-label">` +
+              `<button type="button" data-hangle="45" aria-pressed="${deg === 45}">45°</button><button type="button" data-hangle="135" aria-pressed="${deg === 135}">135°</button>` +
+              `<button type="button" data-hangle="0" aria-pressed="${deg === 0}">0°</button><button type="button" data-hangle="90" aria-pressed="${deg === 90}">90°</button></div></div>`;
+            html += number("Angle of the strokes (degrees)", "sym-hangle", formatNumber(deg), "Turn neighbouring parts' hatching different ways so they read apart.");
+            const gap = s.hatchGap ?? HATCH_GAP;
+            html += slider("Strokes apart (mm in print)", "sym-hgap", 0.5, 6, 0.1, gap, `${formatNumber(gap)} mm`, "Measured on paper: the spacing stays the same however large the drawing is.");
+          }
+        }
         break;
       case "hatch":
         html += `<h2>Hatching</h2>`;
@@ -4292,7 +4552,7 @@ export class App {
 
   private drawPanel(): void {
     const focusField = (document.activeElement as HTMLElement | null)?.dataset?.field;
-    const { pts, lines, rounds, cons, syms, entities } = this.picked();
+    const { pts, lines, rounds, beziers, cons, syms, entities } = this.picked();
     let html = "";
 
     if (this.tool === "arcbeam") {
@@ -4369,6 +4629,7 @@ export class App {
     } else if (cons.length === 1 && entities === 0 && !syms.length && isDimension(cons[0])) {
       const d = cons[0];
       html += `<h2>${RELATION_NAMES[d.type]}</h2>`;
+      if (d.driven) html += `<p class="muted note-block">Driven: the geometry it measures is fixed, so it shows what that measures and holds nothing. It is in the figure like any other dimension. Typed as the drawing's only length dimension, it sets the scale.</p>`;
       html += `<label class="field"><span>Value${d.type === "angle" ? " (degrees)" : ""}</span><input data-field="value" type="text" inputmode="decimal" value="${this.shownValue(d)}"></label>`;
       html += `<label class="field"><span>Label</span><input data-field="label" type="text" spellcheck="false" placeholder="2a, F_1, \\alpha" value="${esc(d.label ?? "")}" data-tex="math"><small>Shown in the figure instead of the number. Written as TeX math; spaces you type are kept. Clicking the number on the drawing edits it in place.</small></label>`;
       if (d.type === "distance") {
@@ -4423,6 +4684,7 @@ export class App {
       count(lines.length, "line", "lines");
       count(rounds.filter((r) => r.type === "circle").length, "circle", "circles");
       count(rounds.filter((r) => r.type === "arc").length, "arc", "arcs");
+      count(beziers.length, "Bézier curve", "Bézier curves");
       count(syms.length, "symbol", "symbols");
       html += `<h2>${names.join(", ")}</h2>`;
       if (pts.length === 1 && entities === 1) {
@@ -4439,7 +4701,7 @@ export class App {
           : `Projected from ${esc(from.join(" and "))}: it follows ${from.length > 1 ? "them" : "it"}, and cannot be moved here. It is left out of the figure.`}</p>` +
           `<button type="button" class="plain" data-act="break-ref" title="It stays where it is, as geometry of this sketch that no longer follows its source">Make it this sketch's own</button>`;
       }
-      const cs: Curve[] = [...lines, ...rounds];
+      const cs: Curve[] = [...lines, ...rounds, ...beziers];
       if (cs.length) {
         // Arrows, springs and dampers are made with their own tools and keep what they are; the rest can be drawn one way or another.
         const plain = cs.filter((c) => !isNamed(c));
@@ -4591,6 +4853,20 @@ export class App {
         if (x.type !== "balloon") return;
         if (ds.frame === "circle") delete x.frame;
         else x.frame = ds.frame as BalloonFrame;
+      });
+      else if (ds.filllook) {
+        this.fillLook = ds.filllook as "color" | "hatch" | "both";
+        this.editSymbol((x) => {
+          if (x.type !== "fill") return;
+          if (ds.filllook === "color") delete x.look;
+          else x.look = ds.filllook as "hatch" | "both";
+        });
+      }
+      else if (ds.hangle) this.editSymbol((x) => {
+        if (x.type !== "fill") return;
+        const a = (Number(ds.hangle) * Math.PI) / 180;
+        if (Math.abs(a - Math.PI / 4) < 1e-9) delete x.hatchAngle;
+        else x.hatchAngle = a;
       });
       else if (ds.ccolor) this.setCurveColor(ds.ccolor === "none" ? null : ds.ccolor);
       else if (ds.skcolor) this.setSketchColor(ds.skcolor === "none" ? null : ds.skcolor);
@@ -4754,7 +5030,7 @@ export class App {
       case "new": return this.newSketch();
       case "break-ref": return this.breakLinks([...this.selection]);
       case "open": return this.fileInput.click();
-      case "save": return this.save();
+      case "save": return void this.save();
       case "export-svg": return void this.exportFigure("svg");
       case "export-tikz": return void this.exportFigure("tikz");
       case "copy-tikz": return void this.exportFigure("copy-tikz");
@@ -4842,8 +5118,8 @@ export class App {
    * dampers are left as they are.
    */
   private setLineStyle(style: LineStyle): void {
-    const { lines, rounds } = this.picked();
-    for (const c of [...lines, ...rounds]) {
+    const { lines, rounds, beziers } = this.picked();
+    for (const c of [...lines, ...rounds, ...beziers]) {
       if (isNamed(c)) continue;
       delete c.construction;
       delete c.centre;
@@ -4859,8 +5135,8 @@ export class App {
    * already, puts them back in the figure drawn as they were before.
    */
   private toggleConstruction(): void {
-    const { lines, rounds } = this.picked();
-    const plain = [...lines, ...rounds].filter((c) => !isNamed(c));
+    const { lines, rounds, beziers } = this.picked();
+    const plain = [...lines, ...rounds, ...beziers].filter((c) => !isNamed(c));
     if (!plain.length) return;
     const on = !plain.every((c) => c.construction);
     for (const c of plain) {
@@ -4913,8 +5189,8 @@ export class App {
   /** Draws the selected curves in a colour, or in black again with null. */
   private setCurveColor(color: string | null): void {
     if (color !== null && !/^#[0-9a-f]{6}$/i.test(color)) return;
-    const { lines, rounds } = this.picked();
-    for (const c of [...lines, ...rounds]) {
+    const { lines, rounds, beziers } = this.picked();
+    for (const c of [...lines, ...rounds, ...beziers]) {
       if (color && color.toLowerCase() !== "#17201b") c.color = color;
       else delete c.color;
     }
@@ -4954,8 +5230,8 @@ export class App {
 
   /** Puts the selected curves back to the standard thickness for how they are drawn. */
   private resetWeight(): void {
-    const { lines, rounds } = this.picked();
-    for (const c of [...lines, ...rounds]) delete c.weight;
+    const { lines, rounds, beziers } = this.picked();
+    for (const c of [...lines, ...rounds, ...beziers]) delete c.weight;
     this.commit();
   }
 
@@ -4976,8 +5252,8 @@ export class App {
 
   /** The selected springs and dampers, when everything selected is one kind of them. */
   private selectedElements(): (Line | Arc)[] {
-    const { lines, rounds, pts, syms, cons } = this.picked();
-    const cs = [...lines, ...rounds];
+    const { lines, rounds, beziers, pts, syms, cons } = this.picked();
+    const cs = [...lines, ...rounds, ...beziers];
     const first = cs[0];
     if (!first || first.type === "circle" || !first.element || pts.length || syms.length || cons.length) return [];
     return cs.every((c) => c.type !== "circle" && c.element === first.element) ? (cs as (Line | Arc)[]) : [];
@@ -5140,8 +5416,8 @@ export class App {
         break;
       case "weight": {
         if (v < WEIGHT_MIN || v > WEIGHT_MAX) return no(`A line is between ${WEIGHT_MIN} and ${WEIGHT_MAX} pt thick.`);
-        const { lines, rounds } = this.picked();
-        for (const c of [...lines, ...rounds]) c.weight = Number(v.toFixed(3));
+        const { lines, rounds, beziers } = this.picked();
+        for (const c of [...lines, ...rounds, ...beziers]) c.weight = Number(v.toFixed(3));
         break;
       }
       case "el-across":
@@ -5151,6 +5427,18 @@ export class App {
         this.editElements((look) => { if (field === "el-across") look.across = size; else look.pitch = size; }, false);
         break;
       }
+      case "sym-opacity":
+        if (s?.type !== "picture") return;
+        if (v < 5 || v > 100) return no("The strength is between 5 and 100 %.");
+        if (Math.abs(v / 100 - PICTURE_OPACITY) < 1e-9) delete s.opacity;
+        else s.opacity = v / 100;
+        break;
+      case "sym-hgap":
+        if (s?.type !== "fill") return;
+        if (v < 0.2 || v > 20) return no("The strokes are between 0.2 and 20 mm apart.");
+        if (Math.abs(v - HATCH_GAP) < 1e-9) delete s.hatchGap;
+        else s.hatchGap = v;
+        break;
       case "sym-gaps":
         if (s?.type !== "centermark") return;
         if (s.gaps === undefined && v === 2) break;
@@ -5327,6 +5615,30 @@ export class App {
         this.setSpan(s, t0, t1);
       }
       else if ((s.type === "fill" || s.type === "datum" || isLoad(s)) && field === "sym-color") return this.setColor(input.value);
+      else if (s.type === "picture" && field === "sym-opacity") {
+        const v2 = Math.max(10, Math.min(100, v));
+        if (!Number.isFinite(v2)) return;
+        if (Math.abs(v2 / 100 - PICTURE_OPACITY) < 1e-9) delete s.opacity;
+        else s.opacity = v2 / 100;
+        return slide(`${Math.round(v2)} %`);
+      } else if (s.type === "picture" && field === "sym-width") {
+        if (!(v > 0)) { this.toast("The width is a number above zero, in the drawing's units."); return this.touch(); }
+        const w = this.fromUnits(v);
+        s.h = (s.h * w) / s.w;
+        s.w = w;
+      }
+      else if (s.type === "fill" && field === "sym-hangle") {
+        if (!Number.isFinite(v)) { this.toast("Type the angle as a number of degrees."); return this.touch(); }
+        const a = ((((v % 180) + 180) % 180) * Math.PI) / 180;
+        if (Math.abs(a - Math.PI / 4) < 1e-9) delete s.hatchAngle;
+        else s.hatchAngle = a;
+      } else if (s.type === "fill" && field === "sym-hgap") {
+        const g = Math.max(0.5, Math.min(6, v));
+        if (!Number.isFinite(g)) return;
+        if (Math.abs(g - HATCH_GAP) < 1e-9) delete s.hatchGap;
+        else s.hatchGap = Number(g.toFixed(2));
+        return slide(`${formatNumber(g)} mm`);
+      }
       else if (s.type === "hatch" && (field === "sym-depth" || field === "sym-freq")) {
         const whole = curveLength(this.sk, s.on);
         if (!Number.isFinite(v) || whole <= 0) return;
@@ -5363,8 +5675,8 @@ export class App {
     if (field === "weight") {
       const v = Math.max(WEIGHT_MIN, Math.min(WEIGHT_MAX, Number(input.value)));
       if (!Number.isFinite(v)) return;
-      const { lines, rounds } = this.picked();
-      for (const c of [...lines, ...rounds]) c.weight = Number(v.toFixed(2));
+      const { lines, rounds, beziers } = this.picked();
+      for (const c of [...lines, ...rounds, ...beziers]) c.weight = Number(v.toFixed(2));
       return slide(this.weightLabel(v));
     }
 
@@ -5483,7 +5795,7 @@ export class App {
       const k = e.key.toLowerCase();
       if (k === "z") { e.preventDefault(); return e.shiftKey ? this.redo() : this.undo(); }
       if (k === "y") { e.preventDefault(); return this.redo(); }
-      if (k === "s") { e.preventDefault(); return this.save(); }
+      if (k === "s") { e.preventDefault(); return void this.save(); }
       if (k === "o") { e.preventDefault(); return this.fileInput.click(); }
       if (k === "a" && this.tab !== "plot") {
         e.preventDefault();

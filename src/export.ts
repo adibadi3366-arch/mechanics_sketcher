@@ -7,7 +7,7 @@ import {
   type Prim, type StrokeStyle, type Outline, type Anchor, type LinePrim, type ArcPrim,
   PAPER, PT_MM, STROKE_DASH, dashOf, strokeWidth, printMm, buildPrims, arrowHeads, strokedEnds, strokedSweep, textBox, textCorners, outlinePolygon,
 } from "./prims";
-import { type V, type Box, emptyBox, grow, boxIsEmpty, polar, wrap, TWO_PI } from "./geom";
+import { type V, type Box, emptyBox, grow, boxIsEmpty, polar, wrap, TWO_PI, bezierPoints } from "./geom";
 import { texEngine } from "./tex";
 import { latexAccents } from "./accents";
 import { outlinePath } from "./render";
@@ -88,6 +88,7 @@ export function fitFigure(sk: Sketch): FittedFigure | null {
 export function figureBounds(prims: Prim[]): Box {
   const b = emptyBox();
   for (const p of prims) {
+    if (p.k === "image") continue; // a picture to trace over is never part of the figure
     if (p.k === "text") {
       for (const q of textCorners(p)) grow(b, q);
     } else if (p.k === "region") {
@@ -99,6 +100,7 @@ export function figureBounds(prims: Prim[]): Box {
         grow(b, p.b, half);
       } else if (p.k === "circle") grow(b, p.c, p.r + half);
       else if (p.k === "poly" || p.k === "path") for (const q of p.pts) grow(b, q, half);
+      else if (p.k === "bezier") for (const q of bezierPoints(p.pts, 32)) grow(b, q, half);
       else {
         const n = Math.max(2, Math.ceil((p.a1 - p.a0) / (Math.PI / 30)));
         for (let i = 0; i <= n; i++) grow(b, polar(p.c, p.r, p.a0 + ((p.a1 - p.a0) * i) / n), half);
@@ -145,6 +147,7 @@ export function primsToSvg(prims: Prim[], k = 1, page?: Box): string | null {
 
   const body: string[] = [];
   for (const p of prims) {
+    if (p.k === "image") continue; // a picture to trace over is never part of the figure
     if (p.k === "region") {
       body.push(`<path d="${outlinePath(p.outlines, M, 1)}" fill="${p.color}" fill-rule="evenodd" stroke="none"/>`);
       continue;
@@ -176,6 +179,9 @@ export function primsToSvg(prims: Prim[], k = 1, page?: Box): string | null {
       body.push(`<polygon points="${p.pts.map(pt).join(" ")}" ${stroke}${fill}/>`);
     } else if (p.k === "path") {
       body.push(`<polyline points="${p.pts.map(pt).join(" ")}" ${stroke}/>`);
+    } else if (p.k === "bezier") {
+      const [a, b, c, d] = p.pts.map(M);
+      body.push(`<path d="M${num(a[0])} ${num(a[1])}C${num(b[0])} ${num(b[1])} ${num(c[0])} ${num(c[1])} ${num(d[0])} ${num(d[1])}" ${stroke}/>`);
     } else {
       const [a0, a1] = strokedSweep(p);
       const s = M(polar(p.c, p.r, a0)), e = M(polar(p.c, p.r, a1));
@@ -224,6 +230,10 @@ function tikzOutline(o: Outline): string {
     if (seg.k === "L") {
       // The last straight side is the one "cycle" draws.
       if (i < o.segs.length - 1) s += ` -- ${co(seg.to)}`;
+      return;
+    }
+    if (seg.k === "C") {
+      s += ` .. controls ${co(seg.c1)} and ${co(seg.c2)} .. ${co(seg.to)}`;
       return;
     }
     // An arc carries on from the current point; its end is the next corner.
@@ -319,6 +329,7 @@ export function tikzParts(prims: Prim[], k = 1): { styles: string[]; lines: stri
   };
 
   for (const p of prims) {
+    if (p.k === "image") continue; // a picture to trace over is never part of the figure
     if (p.k !== "text" && p.k !== "region") used.add(p.stroke);
     if (p.k === "line" && !p.arrowA && !p.arrowB) {
       if (!run || run.style !== style(p) || run.ref !== p.ref || run.parts.length >= 8) {
@@ -350,6 +361,9 @@ export function tikzParts(prims: Prim[], k = 1): { styles: string[]; lines: stri
         bentTip = true;
       }
       lines.push(`  \\draw[${style(p)}${tips(p, k)}] ${co(polar(p.c, p.r, p.a0))} arc[start angle=${deg(p.a0)}, end angle=${deg(p.a1)}, radius=${num(p.r, 2)}];`);
+    } else if (p.k === "bezier") {
+      const [a, b, c, d] = p.pts;
+      lines.push(`  \\draw[${style(p)}] ${co(a)} .. controls ${co(b)} and ${co(c)} .. ${co(d)};`);
     } else if (p.k === "path") {
       // A long curve is broken over lines of the file, so no line of it grows past what an editor shows.
       const rows: string[] = [];

@@ -6,13 +6,13 @@ import {
   type Sketch, type Id, type Dimension, type DistanceDim, type AngleDim, type RadiusDim,
   type Arc, type Line, type Curve, type Sym, type Support, type Frame, type CenterMark, type Balloon,
   type Fill as FillSym, type Hatch, type Datum, type Note, type Load, type LineLoad, type Moment, type AnyLoad, type LoadKind, type Diagram, type Trace,
-  type Etalon, type RightAngle,
+  type Etalon, type RightAngle, type Bezier, HATCH_GAP, PICTURE_OPACITY,
   entity, point, arcRadius, arcAngles, isDimension, isNamed, isLengthDimension, unitScale, geometryBox, geometryExtent,
 } from "./model";
 import { elementPaths, elementReach } from "./element";
 import {
   type V, type Box, add, sub, mul, dot, norm, perp, mid, polar, dist, len, angleOf, wrap, inSweep,
-  distToSegment, intersectLines, TWO_PI,
+  distToSegment, intersectLines, TWO_PI, type Cubic, bezierAt, bezierTangent, bezierNearest, bezierPoints,
 } from "./geom";
 import { texEngine } from "./tex";
 import { baseline, diagramShape, traceShape } from "./diagram";
@@ -129,6 +129,10 @@ export interface CirclePrim extends Base { k: "circle"; c: V; r: number; stroke:
 export interface PolyPrim extends Base { k: "poly"; pts: V[]; stroke: StrokeStyle; fill?: Fill; dash?: undefined }
 /** An open run of straight pieces: a plotted curve. `dash` is its pattern, as on and off lengths in mm. */
 export interface PathPrim extends Base { k: "path"; pts: V[]; stroke: StrokeStyle; width?: number; dash?: number[] }
+/** A picture, in the editor only: its bottom left corner and size, at `opacity`. */
+export interface ImagePrim extends Base { k: "image"; at: V; w: number; h: number; src: string; opacity: number }
+/** A cubic Bézier curve: start, the two control points, end. */
+export interface BezierPrim extends Base { k: "bezier"; pts: Cubic; stroke: StrokeStyle; width?: number; dash?: number[] }
 /** Counter-clockwise from a0 to a1, with a1 > a0. */
 export interface ArcPrim extends Base { k: "arc"; c: V; r: number; a0: number; a1: number; stroke: StrokeStyle; width?: number; dash?: number[]; arrowA?: boolean; arrowB?: boolean; head?: number }
 /**
@@ -148,11 +152,13 @@ export type Outline =
   | { kind: "path"; start: V; segs: OutlineSeg[] };
 export type OutlineSeg =
   | { k: "L"; to: V }
+  /** A Bézier curve on to the next corner, pulled by two control points. */
+  | { k: "C"; to: V; c1: V; c2: V }
   /** An arc about c from angle a0 to a1, counter-clockwise when ccw. */
   | { k: "A"; to: V; c: V; r: number; a0: number; a1: number; ccw: boolean };
 /** A filled area with no outline of its own. Later outlines cut holes (even-odd). */
 export interface RegionPrim extends Base { k: "region"; outlines: Outline[]; color: string }
-export type Prim = LinePrim | CirclePrim | PolyPrim | PathPrim | ArcPrim | TextPrim | RegionPrim;
+export type Prim = LinePrim | CirclePrim | PolyPrim | PathPrim | BezierPrim | ArcPrim | TextPrim | RegionPrim | ImagePrim;
 
 // ---- scale ------------------------------------------------------------------
 
@@ -458,7 +464,7 @@ export function dimensionPrims(sk: Sketch, given: Dimension, mm: number): Prim[]
   if (given.measure) {
     const { label: _, ...rest } = given;
     d = { ...rest, value: measuredDimValue(sk, given) } as Dimension;
-  }
+  } else if (given.driven) d = { ...given, value: measuredDimValue(sk, given) } as Dimension;
   const prims = d.type === "distance" ? distancePrims(sk, d, mm)
     : d.type === "angle" ? anglePrims(sk, d, mm)
     : radiusPrims(sk, d, mm);
@@ -531,7 +537,8 @@ export function measuredValue(sk: Sketch, d: Dimension): number {
 /** Start, end and direction data of a curve, in model units. */
 type CurveShape =
   | { kind: "line"; a: V; b: V }
-  | { kind: "round"; c: V; r: number; a0: number; a1: number; full: boolean };
+  | { kind: "round"; c: V; r: number; a0: number; a1: number; full: boolean }
+  | { kind: "bezier"; q: Cubic };
 
 function curveShape(sk: Sketch, id: Id): CurveShape | null {
   const e = entity(sk, id);
@@ -539,7 +546,14 @@ function curveShape(sk: Sketch, id: Id): CurveShape | null {
   const xy = (pid: Id): V => { const p = point(sk, pid); return [p.x, p.y]; };
   if (e.type === "line") return { kind: "line", a: xy(e.p1), b: xy(e.p2) };
   if (e.type === "circle") return { kind: "round", c: xy(e.c), r: e.r, a0: 0, a1: TWO_PI, full: true };
+  if (e.type === "bezier") return { kind: "bezier", q: [xy(e.p1), xy(e.c1), xy(e.c2), xy(e.p2)] };
   return { kind: "round", c: xy(e.c), r: arcRadius(sk, e), ...arcAngles(sk, e), full: false };
+}
+
+/** A Bézier curve's four points, in model units. */
+export function bezierOf(sk: Sketch, e: Bezier): Cubic {
+  const xy = (pid: Id): V => { const p = point(sk, pid); return [p.x, p.y]; };
+  return [xy(e.p1), xy(e.c1), xy(e.c2), xy(e.p2)];
 }
 
 /** The point at parameter t of a curve: a fraction along a line or arc, an angle on a circle. */
@@ -547,6 +561,7 @@ export function pointOnCurve(sk: Sketch, id: Id, t: number): V | null {
   const c = curveShape(sk, id);
   if (!c) return null;
   if (c.kind === "line") return add(c.a, mul(sub(c.b, c.a), t));
+  if (c.kind === "bezier") return bezierAt(c.q, Math.max(0, Math.min(1, t)));
   return polar(c.c, c.r, c.full ? t : c.a0 + t * (c.a1 - c.a0));
 }
 
@@ -559,6 +574,7 @@ export function curveParam(sk: Sketch, id: Id, q: V): number {
     const l2 = dot(d, d);
     return l2 < 1e-18 ? 0 : Math.max(0, Math.min(1, dot(sub(q, c.a), d) / l2));
   }
+  if (c.kind === "bezier") return bezierNearest(c.q, q).t;
   const ang = angleOf(sub(q, c.c));
   if (c.full) return ang;
   return Math.max(0, Math.min(1, wrap(ang - c.a0) / (c.a1 - c.a0)));
@@ -569,6 +585,10 @@ export function sideOfCurve(sk: Sketch, id: Id, q: V): number {
   const c = curveShape(sk, id);
   if (!c) return 0;
   if (c.kind === "line") return dot(sub(q, c.a), perp(norm(sub(c.b, c.a))));
+  if (c.kind === "bezier") {
+    const { t, d } = bezierNearest(c.q, q);
+    return Math.sign(dot(sub(q, bezierAt(c.q, t)), perp(bezierTangent(c.q, t)))) * d;
+  }
   return c.r - dist(q, c.c);
 }
 
@@ -599,6 +619,7 @@ export function symbolPosition(sk: Sketch, s: Sym): V {
       return [s.x, s.y];
     case "note":
     case "etalon":
+    case "picture":
       return [s.x, s.y];
     case "rightangle": {
       const f = rightAngleFrame(sk, s, 1);
@@ -1109,6 +1130,12 @@ export function hatchCount(length: number, spacing: number): number {
 export function curveLength(sk: Sketch, id: Id): number {
   const c = curveShape(sk, id);
   if (!c) return 0;
+  if (c.kind === "bezier") {
+    const pts = bezierPoints(c.q, 64);
+    let l = 0;
+    for (let i = 1; i < pts.length; i++) l += dist(pts[i - 1], pts[i]);
+    return l;
+  }
   return c.kind === "line" ? dist(c.a, c.b) : c.r * (c.a1 - c.a0);
 }
 
@@ -1133,6 +1160,25 @@ function hatchPrims(sk: Sketch, s: Hatch, mm: number): Prim[] {
     const count = hatchCount(length, spacing);
     const first = (length - (count - 1) * spacing) / 2;
     for (let i = 0; i < count; i++) stroke(add(a, mul(u, first + i * spacing)), u, n);
+    return out;
+  }
+  if (c.kind === "bezier") {
+    // Along the curve at equal steps of its length, each leaning off its direction there.
+    const pts = bezierPoints(c.q.map((q) => mul(q, mm)) as Cubic, 96);
+    const at = [0];
+    for (let i = 1; i < pts.length; i++) at.push(at[i - 1] + dist(pts[i - 1], pts[i]));
+    const length = at[at.length - 1];
+    if (length < 1e-9) return [];
+    const count = hatchCount(length, spacing);
+    const first = (length - (count - 1) * spacing) / 2;
+    let j = 1;
+    for (let i = 0; i < count; i++) {
+      const want = first + i * spacing;
+      while (j < pts.length - 1 && at[j] < want) j++;
+      const k = (want - at[j - 1]) / ((at[j] - at[j - 1]) || 1);
+      const u = norm(sub(pts[j], pts[j - 1]));
+      stroke(add(pts[j - 1], mul(sub(pts[j], pts[j - 1]), k)), u, mul(perp(u), s.side));
+    }
     return out;
   }
   const ctr = mul(c.c, mm), r = c.r * mm;
@@ -1163,6 +1209,13 @@ export function fillOutlines(sk: Sketch, f: FillSym, mm: number): Outline[] {
       const from = at(i), to = at(i + 1);
       const arcId = f.arcs[i];
       const arc = arcId ? entity(sk, arcId) : undefined;
+      if (arc?.type === "bezier") {
+        // Run from this corner to the next, the way round the curve that goes that way.
+        const [a, b, c, d] = bezierOf(sk, arc).map((q) => mul(q, mm)) as Cubic;
+        const forward = dist(a, from) <= dist(d, from);
+        segs.push(forward ? { k: "C", to, c1: b, c2: c } : { k: "C", to, c1: c, c2: b });
+        return;
+      }
       if (arc?.type !== "arc") {
         segs.push({ k: "L", to });
         return;
@@ -1187,6 +1240,7 @@ export function outlinePolygon(o: Outline): V[] {
   }
   const pts: V[] = [o.start];
   for (const seg of o.segs) {
+    if (seg.k === "C") pts.push(...bezierPoints([pts[pts.length - 1], seg.c1, seg.c2, seg.to], 24).slice(1, -1));
     if (seg.k === "A") {
       const sweep = seg.ccw ? wrap(seg.a1 - seg.a0) || TWO_PI : -(wrap(seg.a0 - seg.a1) || TWO_PI);
       const n = Math.max(2, Math.ceil(Math.abs(sweep) / (Math.PI / 30)));
@@ -1198,13 +1252,57 @@ export function outlinePolygon(o: Outline): V[] {
   return pts;
 }
 
-function fillPrims(sk: Sketch, f: FillSym, mm: number): Prim[] {
+/**
+ * Strokes across a region `gap` apart at `angle`, cut where the region ends:
+ * the hatching of a cut. They are laid on lines through the origin of the
+ * paper, so regions hatched side by side line up. Holes are left bare.
+ */
+export function hatchStrokes(outlines: Outline[], angle: number, gap: number): [V, V][] {
+  const c = Math.cos(angle), s = Math.sin(angle);
+  // Turned so the strokes run along x: each is then a row at some y.
+  const into = ([x, y]: V): V => [x * c + y * s, -x * s + y * c];
+  const back = ([x, y]: V): V => [x * c - y * s, x * s + y * c];
+  const rings = outlines.map((o) => outlinePolygon(o).map(into)).filter((r) => r.length >= 3);
+  if (!rings.length || !(gap > 0)) return [];
+  let lo = Infinity, hi = -Infinity;
+  for (const r of rings) for (const q of r) { lo = Math.min(lo, q[1]); hi = Math.max(hi, q[1]); }
+  const out: [V, V][] = [];
+  const rows = Math.ceil(hi / gap) - Math.floor(lo / gap);
+  if (rows > 5000) return [];
+  for (let k = Math.floor(lo / gap); k * gap <= hi; k++) {
+    const y = k * gap;
+    const xs: number[] = [];
+    for (const r of rings) {
+      for (let i = 0; i < r.length; i++) {
+        const a = r[i], b = r[(i + 1) % r.length];
+        // Half-open, so a row through a corner counts it once.
+        if ((a[1] <= y) !== (b[1] <= y)) xs.push(a[0] + ((y - a[1]) * (b[0] - a[0])) / (b[1] - a[1]));
+      }
+    }
+    xs.sort((p, q) => p - q);
+    for (let i = 0; i + 1 < xs.length; i += 2) if (xs[i + 1] - xs[i] > 1e-9) out.push([back([xs[i], y]), back([xs[i + 1], y])]);
+  }
+  return out;
+}
+
+function fillPrims(sk: Sketch, f: FillSym, mm: number, editor = true): Prim[] {
   const outlines = fillOutlines(sk, f, mm);
-  return outlines.length ? [{ k: "region", outlines, color: f.color, ref: f.id, layer: "fill" }] : [];
+  if (!outlines.length) return [];
+  const out: Prim[] = [];
+  const base = { ref: f.id, layer: "fill" as const };
+  if (f.look !== "hatch") out.push({ ...base, k: "region", outlines, color: f.color });
+  // Hatching alone still has its area to click on in the editor, barely there.
+  else if (editor) out.push({ ...base, k: "region", outlines, color: "#ffffff", ghost: true });
+  if (f.look) {
+    for (const [a, b] of hatchStrokes(outlines, f.hatchAngle ?? Math.PI / 4, f.hatchGap ?? HATCH_GAP)) out.push({ ...base, k: "line", a, b, stroke: "hatch" });
+  }
+  return out;
 }
 
 export function symbolPrims(sk: Sketch, s: Sym, mm: number): Prim[] {
   switch (s.type) {
+    // Drawn under everything by buildPrims, in the editor only.
+    case "picture": return [];
     case "support": return supportPrims(sk, s, mm);
     case "frame": return framePrims(sk, s, mm);
     case "centermark": return centerMarkPrims(sk, s, mm);
@@ -1276,9 +1374,15 @@ export interface BuildOptions {
 
 export function buildPrims(sk: Sketch, mm: number, opts: BuildOptions): Prim[] {
   const out: Prim[] = [];
+  // Pictures to trace over lie under everything, and only in the editor.
+  if (opts.editor) {
+    for (const s of sk.symbols) {
+      if (s.type === "picture") out.push({ k: "image", ref: s.id, layer: "fill", at: [s.x * mm, s.y * mm], w: s.w * mm, h: s.h * mm, src: s.src, opacity: s.opacity ?? PICTURE_OPACITY });
+    }
+  }
   // Fills lie under everything else, and so does the shading of a spread load: the line it is on is drawn over it.
   for (const sym of sk.symbols) {
-    if (sym.type === "fill") out.push(...symbolPrims(sk, sym, mm));
+    if (sym.type === "fill") out.push(...fillPrims(sk, sym, mm, opts.editor));
     else if (sym.type === "lineload") out.push(...loadShade(sk, sym, mm));
     else if (sym.type === "diagram") out.push(...diagramShade(sk, sym, mm));
     else if (sym.type === "trace") out.push(...traceShade(sk, sym, mm));
@@ -1327,6 +1431,8 @@ export function buildPrims(sk: Sketch, mm: number, opts: BuildOptions): Prim[] {
       name();
     } else if (e.type === "circle") {
       out.push({ ...base, k: "circle", c: P(sk, e.c, mm), r: e.r * mm });
+    } else if (e.type === "bezier") {
+      out.push({ ...base, k: "bezier", pts: bezierOf(sk, e).map((q) => mul(q, mm)) as Cubic });
     } else {
       const { a0, a1 } = arcAngles(sk, e);
       const arc: ArcPrim = { ...base, k: "arc", c: P(sk, e.c, mm), r: arcRadius(sk, e) * mm, a0, a1 };
@@ -1479,6 +1585,8 @@ export function primDistance(p: Prim, q: V): number {
       for (let i = 1; i < p.pts.length; i++) best = Math.min(best, distToSegment(q, p.pts[i - 1], p.pts[i]));
       return best;
     }
+    case "bezier": return bezierNearest(p.pts, q).d;
+    case "image": return q[0] >= p.at[0] && q[0] <= p.at[0] + p.w && q[1] >= p.at[1] && q[1] <= p.at[1] + p.h ? 0 : Infinity;
     case "arc": {
       const ang = angleOf(sub(q, p.c));
       if (inSweep(ang, p.a0, p.a1)) return Math.abs(dist(q, p.c) - p.r);

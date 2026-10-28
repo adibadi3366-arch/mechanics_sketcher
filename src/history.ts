@@ -4,6 +4,8 @@
 import { type Sketch, clone } from "./model";
 
 const LIMIT = 300;
+/** About how much the undo steps may take together, in characters of the drawing written out: a large imported drawing keeps fewer of them. */
+const BUDGET = 40e6;
 
 export class History {
   private states: Sketch[] = [];
@@ -19,7 +21,9 @@ export class History {
   commit(sk: Sketch): void {
     this.states.length = this.index + 1;
     this.states.push(clone(sk));
-    if (this.states.length > LIMIT) this.states.shift();
+    const size = JSON.stringify(sk).length;
+    const keep = Math.max(20, Math.min(LIMIT, Math.floor(BUDGET / Math.max(1, size))));
+    while (this.states.length > keep) this.states.shift();
     this.index = this.states.length - 1;
   }
 

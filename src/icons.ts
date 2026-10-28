@@ -11,6 +11,8 @@ export const ICONS: Record<string, string> = {
   construction: `<path d="M6 14l8-8" stroke-dasharray="2.200 2.700"/>${dot(4.5, 15.5)}${dot(15.5, 4.5)}`,
   circle: `<circle cx="10" cy="10" r="6.8"/>${dot(10, 10, 1.3)}`,
   arc: `<path d="M4 15.5A11.5 11.5 0 0 1 15.5 4"/>${dot(4, 15.5)}${dot(15.5, 4)}${dot(15.5, 15.5, 1.3)}`,
+  // A Bézier curve, with the lines to its two control points.
+  bezier: `<path d="M3 15.5C6 4 14 16 17 4.5"/><path d="M3 15.5L6.5 5M17 4.5l-3.5 10.5" stroke-width="1" stroke-dasharray="1.6 1.4"/>${dot(3, 15.5)}${dot(17, 4.5)}${dot(6.5, 5, 1.2)}${dot(13.5, 15, 1.2)}`,
 
   horizontal: `<path d="M3 10h14"/><path d="M3 7.5v5M17 7.5v5" stroke-width="1.2"/>`,
   vertical: `<path d="M10 3v14"/><path d="M7.5 3h5M7.5 17h5" stroke-width="1.2"/>`,

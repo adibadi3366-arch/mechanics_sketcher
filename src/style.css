@@ -762,3 +762,11 @@ input.tex-shown:not(:focus) {
 .sketch-style { margin: 0 0 12px; padding: 8px 10px; border: 1px solid var(--rule); border-radius: 6px; background: var(--board-hi); }
 .sketch-style summary { cursor: pointer; font-weight: 500; }
 .sketch-style[open] summary { margin-bottom: 8px; }
+/* A Bézier curve's control points, and the lines to them, while it is selected. */
+.bz-handle { stroke: var(--sel); stroke-width: 1; stroke-dasharray: 4 3; opacity: 0.8; pointer-events: none; }
+.pt.ctl { fill: var(--paper); stroke: var(--sel); }
+.pt.ctl.sel, .pt.ctl.hov { fill: var(--sel); }
+/* A picture to trace over, and its frame while it is selected. */
+image.picture { pointer-events: none; }
+.picture-frame { fill: none; stroke: #f08a4b; stroke-width: 1.2; pointer-events: none; }
+.picture-frame.sel { stroke: var(--sel); stroke-width: 1.6; stroke-dasharray: 6 4; }

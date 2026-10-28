@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Like a CAD program writes a drawing: mm paper, a style sheet, groups with transforms. -->
+<svg xmlns="http://www.w3.org/2000/svg" width="120mm" height="80mm" viewBox="0 0 1200 800">
+  <style>
+    .visible { stroke: #000; stroke-width: 5; fill: none; }
+    .hidden { stroke: #000; stroke-width: 3; stroke-dasharray: 20 10; fill: none; }
+    .center { stroke: #000; stroke-width: 2.5; stroke-dasharray: 60 10 10 10; fill: none; }
+  </style>
+  <g transform="translate(100 100)">
+    <!-- The outline: a plate with a rounded corner. -->
+    <path class="visible" d="M0 0 H800 V420 A80 80 0 0 1 720 500 H0 Z"/>
+    <!-- A hole, and its centre lines. -->
+    <circle class="visible" cx="250" cy="250" r="90"/>
+    <line class="center" x1="130" y1="250" x2="370" y2="250"/>
+    <line class="center" x1="250" y1="130" x2="250" y2="370"/>
+    <!-- A rib across the plate: it ends on the outline, making two regions. -->
+    <polyline class="visible" points="500,0 500,500"/>
+    <!-- A hidden slot. -->
+    <rect class="hidden" x="560" y="150" width="160" height="60"/>
+    <!-- A spline edge. -->
+    <path class="visible" d="M560 300 C 600 260, 680 340, 720 300"/>
+    <!-- Dimension: text and filled arrowheads, which are left out. -->
+    <text x="400" y="-30" font-size="40">800</text>
+    <polygon points="0,-40 20,-45 20,-35" fill="#000"/>
+    <polygon points="800,-40 780,-45 780,-35" fill="#000"/>
+    <line x1="0" y1="-40" x2="800" y2="-40" stroke="#000" stroke-width="2"/>
+  </g>
+</svg>

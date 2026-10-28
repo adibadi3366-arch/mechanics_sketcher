@@ -64,3 +64,54 @@ export function grow(b: Box, p: V, r = 0): void {
   b.y1 = Math.max(b.y1, p[1] + r);
 }
 export const boxIsEmpty = (b: Box): boolean => b.x1 < b.x0;
+
+// ---- cubic Bézier curves ------------------------------------------------------
+
+/** A cubic Bézier curve: start, first control, second control, end. */
+export type Cubic = [V, V, V, V];
+
+/** The point at t, from 0 at the start to 1 at the end. */
+export function bezierAt([a, b, c, d]: Cubic, t: number): V {
+  const u = 1 - t;
+  const k0 = u * u * u, k1 = 3 * u * u * t, k2 = 3 * u * t * t, k3 = t * t * t;
+  return [k0 * a[0] + k1 * b[0] + k2 * c[0] + k3 * d[0], k0 * a[1] + k1 * b[1] + k2 * c[1] + k3 * d[1]];
+}
+
+/** The direction it runs in at t (not of unit length). */
+export function bezierTangent([a, b, c, d]: Cubic, t: number): V {
+  const u = 1 - t;
+  const k0 = 3 * u * u, k1 = 6 * u * t, k2 = 3 * t * t;
+  const v: V = [k0 * (b[0] - a[0]) + k1 * (c[0] - b[0]) + k2 * (d[0] - c[0]), k0 * (b[1] - a[1]) + k1 * (c[1] - b[1]) + k2 * (d[1] - c[1])];
+  // Where a control point sits on its end, the direction there is towards the other one.
+  return len(v) > 1e-12 ? v : sub(t < 0.5 ? (dist(b, a) > 1e-12 ? b : c) : d, t < 0.5 ? a : (dist(c, d) > 1e-12 ? c : b));
+}
+
+/** Points along it, both ends included: enough that the straight pieces between them look curved. */
+export function bezierPoints(q: Cubic, n = 0): V[] {
+  // About one piece for every few degrees the control polygon turns, and a few at least.
+  const steps = n || Math.max(8, Math.min(64, Math.ceil((dist(q[0], q[1]) + dist(q[1], q[2]) + dist(q[2], q[3])) / (dist(q[0], q[3]) + 1e-12) * 8)));
+  const out: V[] = [];
+  for (let i = 0; i <= steps; i++) out.push(bezierAt(q, i / steps));
+  return out;
+}
+
+/** The parameter of the point on it nearest to p, and how far that is. */
+export function bezierNearest(q: Cubic, p: V): { t: number; d: number } {
+  const n = 48;
+  let best = { t: 0, d: Infinity };
+  for (let i = 0; i <= n; i++) {
+    const t = i / n, d = dist(bezierAt(q, t), p);
+    if (d < best.d) best = { t, d };
+  }
+  // Closer in, by halving the step round the best sample.
+  let step = 1 / n;
+  for (let k = 0; k < 20; k++) {
+    step /= 2;
+    for (const t of [best.t - step, best.t + step]) {
+      if (t < 0 || t > 1) continue;
+      const d = dist(bezierAt(q, t), p);
+      if (d < best.d) best = { t, d };
+    }
+  }
+  return best;
+}

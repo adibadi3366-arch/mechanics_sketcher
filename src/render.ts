@@ -2,8 +2,27 @@
 // aids (point handles, constraint markers, previews) that never get exported.
 
 import {
-  type Sketch, type Id, type Constraint, type Curve, ORIGIN, entity, point, isDimension, arcRadius, isFixed,
+  type Sketch, type Id, type Constraint, type Curve, ORIGIN, entity, point, isDimension, arcRadius, controlPoints, fixedPoints,
 } from "./model";
+
+const pointXY = (sk: Sketch, id: Id): V => { const p = point(sk, id); return [p.x, p.y]; };
+
+/**
+ * A short address for a picture held as a data URL: the screen is redrawn
+ * often, and a picture written out in full each time would be slow to take
+ * apart again. One is made for each picture and kept.
+ */
+const imageUrls = new Map<string, string>();
+export function imageUrl(src: string): string {
+  let url = imageUrls.get(src);
+  if (url) return url;
+  const m = /^data:([^;,]+)(;base64)?,(.*)$/s.exec(src);
+  if (!m || typeof URL.createObjectURL !== "function") return src;
+  const bytes = m[2] ? Uint8Array.from(atob(m[3]), (c) => c.charCodeAt(0)) : new TextEncoder().encode(decodeURIComponent(m[3]));
+  url = URL.createObjectURL(new Blob([bytes], { type: m[1] }));
+  imageUrls.set(src, url);
+  return url;
+}
 import { type V, type Box, add, sub, mul, norm, perp, mid, polar, wrap, projectOnSegment, TWO_PI } from "./geom";
 import { type Prim, type StrokeStyle, type Outline, PAPER, dashOf, strokeWidth, arrowHeads, strokedEnds, strokedSweep, textBox } from "./prims";
 import type { Overlaps } from "./regions";
@@ -38,6 +57,8 @@ export interface Preview {
   danger?: boolean;
   /** The path the pointer has taken while trimming, drawn as a thin trail. */
   trail?: V[];
+  /** Bézier curves about to be drawn: start, controls, end. */
+  beziers?: [V, V, V, V][];
 }
 
 export interface SnapMark {
@@ -124,6 +145,7 @@ export function layoutGlyphs(sk: Sketch, view: View, show: (c: Constraint) => bo
     const e = entity(sk, id) as Curve | undefined;
     if (!e) return;
     if (e.type === "line") return atSpan(c, S(e.p1), S(e.p2));
+    if (e.type === "bezier") return atSpan(c, S(e.p1), S(e.p2));
     const ctr = point(sk, e.c);
     let ang = Math.PI / 4;
     let r = 0;
@@ -173,7 +195,7 @@ export function layoutGlyphs(sk: Sketch, view: View, show: (c: Constraint) => bo
       case "turn": atPoint(c, c.c); break;
       case "tangent": {
         const l = entity(sk, c.l), round = entity(sk, c.c);
-        if (!l || !round || round.type === "point" || round.type === "line" || l.type === "point") break;
+        if (!l || !round || round.type === "point" || round.type === "line" || round.type === "bezier" || l.type === "point" || l.type === "bezier") break;
         if (l.type !== "line") {
           // Two circles or arcs: where they touch, on the rim of the second towards the first.
           const from = point(sk, round.c), to = point(sk, l.c);
@@ -232,7 +254,7 @@ export type PrimScene = Pick<Scene, "view" | "mm" | "prims" | "selection" | "rel
 function primClass(s: PrimScene, p: Prim): string {
   // Typeset text is a nested <svg>; it gets its own base class so the stroke
   // rules for drawn shapes do not leak into it.
-  const cls = p.k === "text" ? ["tex", p.layer] : p.k === "region" ? ["region"] : ["prim", p.layer, p.stroke];
+  const cls = p.k === "text" ? ["tex", p.layer] : p.k === "region" ? ["region"] : p.k === "image" ? ["picture"] : ["prim", p.layer, p.stroke];
   if ((p.k === "circle" || p.k === "poly") && p.fill) cls.push(p.fill === "ink" ? "solid" : "filled");
   if (p.color) cls.push("tinted");
   if (p.ink) cls.push("inked");
@@ -277,7 +299,10 @@ export function outlinePath(outlines: Outline[], M: (p: V) => V, pxPerMm: number
     for (const seg of o.segs) {
       const to = M(seg.to);
       if (seg.k === "L") d += `L${n2(to[0])} ${n2(to[1])}`;
-      else {
+      else if (seg.k === "C") {
+        const c1 = M(seg.c1), c2 = M(seg.c2);
+        d += `C${n2(c1[0])} ${n2(c1[1])} ${n2(c2[0])} ${n2(c2[1])} ${n2(to[0])} ${n2(to[1])}`;
+      } else {
         const sweep = seg.ccw ? wrap(seg.a1 - seg.a0) : wrap(seg.a0 - seg.a1);
         const r = n2(seg.r * pxPerMm);
         // Counter-clockwise on paper is sweep-flag 0 on the y-down screen.
@@ -298,6 +323,12 @@ export function drawPrims(s: PrimScene): string {
   let out = "";
   for (const p of s.prims) {
     const cls = primClass(s, p);
+    if (p.k === "image") {
+      const tl = M([p.at[0], p.at[1] + p.h]);
+      out += `<image class="${cls}" href="${imageUrl(p.src)}" x="${n2(tl[0])}" y="${n2(tl[1])}" width="${n2(p.w * pxPerMm)}" height="${n2(p.h * pxPerMm)}" opacity="${p.opacity}" preserveAspectRatio="none"/>`;
+      if (s.selection.has(p.ref ?? "") || s.hover === p.ref) out += `<rect class="picture-frame${s.selection.has(p.ref ?? "") ? " sel" : ""}" x="${n2(tl[0])}" y="${n2(tl[1])}" width="${n2(p.w * pxPerMm)}" height="${n2(p.h * pxPerMm)}"/>`;
+      continue;
+    }
     if (p.k === "region") {
       out += `<path class="${cls}" d="${outlinePath(p.outlines, M, pxPerMm)}" fill="${p.color}" fill-rule="evenodd"/>`;
       continue;
@@ -330,6 +361,9 @@ export function drawPrims(s: PrimScene): string {
       out += `<polygon class="${cls}" points="${p.pts.map((q) => M(q).map(n2).join(",")).join(" ")}" ${sw}/>`;
     } else if (p.k === "path") {
       out += `<polyline class="${cls}" points="${p.pts.map((q) => M(q).map(n2).join(",")).join(" ")}" ${sw}/>`;
+    } else if (p.k === "bezier") {
+      const [a, b, c, d] = p.pts.map(M);
+      out += `<path class="${cls}" d="M${n2(a[0])} ${n2(a[1])}C${n2(b[0])} ${n2(b[1])} ${n2(c[0])} ${n2(c[1])} ${n2(d[0])} ${n2(d[1])}" ${sw}/>`;
     } else {
       const [a0, a1] = strokedSweep(p);
       out += `<path class="${cls}" d="${arcPath(view, [p.c[0] / mm, p.c[1] / mm], p.r / mm, a0, a1)}" ${sw}/>`;
@@ -348,10 +382,28 @@ function drawHandles(s: Scene): string {
   // A datum point shows its coloured dot, or the mark of a centre of mass: its handle is a ring around that, not a disc over it.
   const datums = new Map<Id, number>();
   for (const x of s.sk.symbols) if (x.type === "datum") datums.set(x.at, ((x.mass ? PAPER.massRadius : PAPER.datumRadius) * s.view.scale) / s.mm);
+  // A Bézier curve's control points show, with the lines to them, while it is selected or one of them is in hand.
+  const controls = controlPoints(s.sk);
+  const shown = (id: Id) => {
+    const bz = controls.get(id)!;
+    return s.selection.has(bz.id) || s.selection.has(id) || s.hover === id || s.selection.has(bz.c1) || s.selection.has(bz.c2);
+  };
+  for (const [id, bz] of controls) {
+    if (id !== bz.c1 || !shown(id)) continue;
+    for (const [end, ctl] of [[bz.p1, bz.c1], [bz.p2, bz.c2]] as [Id, Id][]) {
+      const a = toScreen(s.view, pointXY(s.sk, end)), b = toScreen(s.view, pointXY(s.sk, ctl));
+      out += `<line class="bz-handle" x1="${n2(a[0])}" y1="${n2(a[1])}" x2="${n2(b[0])}" y2="${n2(b[1])}"/>`;
+    }
+  }
+  const fixed = fixedPoints(s.sk);
   for (const e of s.sk.entities) {
     if (e.type !== "point") continue;
+    if (controls.has(e.id) && !shown(e.id)) continue;
+    // Imported points are many and fixed: each shows only while it is pointed at or picked.
+    if (e.locked && s.hover !== e.id && !s.selection.has(e.id) && !s.related.has(e.id)) continue;
     const p = toScreen(s.view, [e.x, e.y]);
     const cls = ["pt"];
+    if (controls.has(e.id)) cls.push("ctl");
     const lit = s.selection.has(e.id) || s.hover === e.id;
     if (s.related.has(e.id)) cls.push("rel");
     if (s.hover === e.id) cls.push("hov");
@@ -363,7 +415,7 @@ function drawHandles(s: Scene): string {
         `<path d="M${n2(p[0] - r - 3)} ${n2(p[1])}h${2 * r + 6}M${n2(p[0])} ${n2(p[1] - r - 3)}v${2 * r + 6}"/></g>`;
       continue;
     }
-    if (isFixed(s.sk, e.id)) cls.push("fixed");
+    if (fixed.has(e.id)) cls.push("fixed");
     if (e.ref) cls.push("ref");
     if (!s.freeIds.has(e.id)) cls.push("defined");
     const dotPx = datums.get(e.id);
@@ -429,6 +481,10 @@ function drawPreview(s: Scene): string {
     out += `<circle class="${cls}" cx="${n2(p[0])}" cy="${n2(p[1])}" r="${n2(c.r * s.view.scale)}"/>`;
   }
   for (const a of pv.arcs) out += `<path class="${cls}" d="${arcPath(s.view, a.c, a.r, a.a0, a.a1)}"/>`;
+  for (const q of pv.beziers ?? []) {
+    const [a, b, c, d] = q.map((x) => toScreen(s.view, x));
+    out += `<path class="${cls}" d="M${n2(a[0])} ${n2(a[1])}C${n2(b[0])} ${n2(b[1])} ${n2(c[0])} ${n2(c[1])} ${n2(d[0])} ${n2(d[1])}"/>`;
+  }
   if (pv.trail && pv.trail.length > 1) {
     out += `<polyline class="trail" points="${pv.trail.map((q) => toScreen(s.view, q).map(n2).join(",")).join(" ")}"/>`;
   }
