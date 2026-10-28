@@ -215,6 +215,11 @@ The live app shows the Support button for 3 seconds before an export finishes; t
 - **Project:** brings a line, circle, arc or point of a sketch to the left into the current one as orange reference geometry. It is fixed where its source is, follows it when that sketch changes, and is left out of the figure. Its side panel can make it the sketch's own.
 - **Faster on large drawings:** the check of what can still move takes one solve instead of one per point (about 20 ms instead of 0.6 s at 100 points).
 - **Exact values for sliders:** every slider has a box beside it to type the value.
+- **Save is an SVG; exports reopen:** Save writes an SVG picture of the figure with the whole drawing inside it, and exported SVG and TikZ files carry the drawing too (in the SVG's metadata, in comment lines at the end of the .tex). Open brings any of them back with dimensions, constraints and sketches. Older .json drawings still open.
+- **Hatched fills:** a fill can be colour, hatching, or both: thin strokes across the region as a cut is drawn, at a chosen angle and spacing in mm on paper.
+- **Bézier curve:** a smooth free curve on the Sketch tab; click its ends, then bend it. Select it to drag its two control points. It can bound a fill and exports as a true curve.
+- **Pictures to trace over:** open a PNG or JPG and it comes in, faint, in a sketch of its own: drag it into place, scale it by its corner, and trace over it in another sketch. Never exported.
+- **Annotating drawings from CAD:** open any other SVG and its lines, arcs, circles and curves come in as a sketch of their own, fixed in place, with their thicknesses, dashes and centre lines. Text, pictures and filled shapes are left out. Closed regions can be filled and hatched; dimensions of it are driven (they show what it measures), and the first one sets the scale.
 
 ---
 

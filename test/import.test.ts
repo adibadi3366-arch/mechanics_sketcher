@@ -1,14 +1,13 @@
 // Bringing in an SVG drawing from elsewhere, to annotate it.
 
 import { describe, it, expect } from "vitest";
-import { readFileSync } from "fs";
 import { importSvg, parsePath, parseXml } from "../src/svgimport";
 import { hatchStrokes, buildPrims } from "../src/prims";
 import { emptySketch, addPoint, addLine, addArc, addCircle, addBezier, addSymbol, type Sketch } from "../src/model";
 import { regionAt } from "../src/regions";
 import { toSvg, toTikz } from "../src/export";
 
-const bracket = readFileSync(new URL("./fixtures/bracket.svg", import.meta.url), "utf8");
+import bracket from "./fixtures/bracket.svg?raw";
 
 describe("reading SVG", () => {
   it("reads elements, attributes and style sheets, passing over comments", () => {
