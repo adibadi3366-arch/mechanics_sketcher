@@ -209,6 +209,7 @@ The live app shows the Support button for 3 seconds before an export finishes; t
 - **Relative dimensions (Creo-style):** the first length dimension only sets the scale and nothing moves; every later dimension is relative to it. Measures, etalons and every length shown in the side panel are in those units. The plan is in `docs/dimension-scale-plan.md`.
 - **Fitted export:** the whole figure, dimensions and text included, is fitted to the set width with 5 % margins; SVG and TikZ come out exactly that wide. The print preview shows the page with its margin.
 - **Short dimensions:** arrowheads point in from outside when they don't fit, and a number that doesn't fit goes past the extension line.
+- **Distance between parallel lines, and from a point to a line:** pick the two lines (or a point and a line) with Dimension; the dimension is measured square to the line and can be dragged along it.
 
 ---
 

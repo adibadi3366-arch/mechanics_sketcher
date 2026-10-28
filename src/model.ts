@@ -177,6 +177,11 @@ export interface DistanceDim extends DimBase {
   offset: number;
   /** Whether the text is turned to run along the dimension line. Unset: along for aligned, upright otherwise. */
   text?: "along" | "upright";
+  /**
+   * `b` is a line, not a point: the distance is from point a square to that
+   * line, as between two parallel lines or from a point to a line. Always aligned.
+   */
+  toLine?: true;
 }
 export interface AngleDim extends DimBase {
   type: "angle";

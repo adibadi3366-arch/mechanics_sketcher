@@ -243,6 +243,7 @@ function constraintPrims(sk: Sketch, c: Constraint, params: FreeParam[]): Prim[]
       return [{ id, type: "tangent_la", l_id: c.l, a_id: c.c }];
     }
     case "distance": {
+      if (c.toLine) return [{ id, type: "p2l_distance", p_id: c.a, l_id: c.b, distance: length(c.value) }];
       if (c.mode === "aligned") {
         return [{ id, type: "p2p_distance", p1_id: c.a, p2_id: c.b, distance: length(c.value) }];
       }

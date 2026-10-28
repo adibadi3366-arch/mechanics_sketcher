@@ -301,9 +301,19 @@ const P = (sk: Sketch, id: Id, mm: number): V => {
 /** Below this length, in paper mm, a dimension line has its arrowheads outside the extension lines: two heads and a little room. */
 export const SHORT_SPAN = 2 * PAPER.arrowLen + 1;
 
+/** Where a distance to a line is measured to: the foot of the point on that line, as far as it runs either way. In paper mm. */
+function footOnLine(sk: Sketch, d: DistanceDim, mm: number): V {
+  const A = P(sk, d.a, mm);
+  const l = entity(sk, d.b);
+  if (l?.type !== "line") return A;
+  const p = P(sk, l.p1, mm), q = P(sk, l.p2, mm);
+  const t = sub(q, p), tt = dot(t, t);
+  return tt < 1e-18 ? p : add(p, mul(t, dot(sub(A, p), t) / tt));
+}
+
 /** Where a distance dimension's line runs, in paper mm. */
 export function distanceFrame(sk: Sketch, d: DistanceDim, mm: number) {
-  const A = P(sk, d.a, mm), B = P(sk, d.b, mm);
+  const A = P(sk, d.a, mm), B = d.toLine ? footOnLine(sk, d, mm) : P(sk, d.b, mm);
   const side = d.offset < 0 ? -1 : 1;
   const offset = d.offset * mm;
   if (d.mode === "horizontal") {
@@ -489,6 +499,10 @@ export function settleLengthScale(sk: Sketch): void {
  */
 export function measuredValue(sk: Sketch, d: Dimension): number {
   if (d.type === "distance") {
+    if (d.toLine) {
+      const f = footOnLine(sk, d, 1), a = point(sk, d.a);
+      return Math.hypot(a.x - f[0], a.y - f[1]);
+    }
     const a = point(sk, d.a), b = point(sk, d.b);
     if (d.mode === "horizontal") return Math.abs(b.x - a.x);
     if (d.mode === "vertical") return Math.abs(b.y - a.y);

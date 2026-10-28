@@ -136,3 +136,46 @@ describe("a short dimension", () => {
     expect(right.a[0]).toBeGreaterThan(right.b[0]);
   });
 });
+
+describe("a distance to a line", () => {
+  /** Two parallel lines 4 apart, held parallel, the first fixed in place. */
+  function rails() {
+    const sk = emptySketch();
+    const a = addPoint(sk, 0, 0), b = addPoint(sk, 10, 0), c = addPoint(sk, 1, 4), e = addPoint(sk, 8, 4);
+    const l1 = addLine(sk, a.id, b.id), l2 = addLine(sk, c.id, e.id);
+    addConstraint(sk, { type: "fixed", p: a.id });
+    addConstraint(sk, { type: "fixed", p: b.id });
+    addConstraint(sk, { type: "parallel", l1: l1.id, l2: l2.id });
+    return { sk, l1, l2, c, e };
+  }
+
+  it("holds two parallel lines that far apart", () => {
+    const { sk, l1, c, e } = rails();
+    const d = addConstraint(sk, { type: "distance", a: c.id, b: l1.id, mode: "aligned", toLine: true, value: 6, offset: 0 });
+    expect(solver.solve(sk).ok).toBe(true);
+    expect(c.y).toBeCloseTo(6, 6);
+    expect(e.y).toBeCloseTo(6, 6);
+    expect(measuredDimValue(sk, d as never)).toBeCloseTo(6, 9);
+  });
+
+  it("is laid out square to the line, at the point's foot", () => {
+    const { sk, l1, c } = rails();
+    addConstraint(sk, { type: "distance", a: c.id, b: l1.id, mode: "aligned", toLine: true, value: 4, offset: 2 });
+    const dims = buildPrims(sk, 10, { editor: false }).filter((p): p is LinePrim => p.k === "line" && p.stroke === "dim");
+    const main = dims.find((p) => p.arrowA && p.arrowB)!;
+    // From the point (1, 4) down to its foot (1, 0), moved 2 along the lines; at 10 mm a unit.
+    const xs = [main.a[0], main.b[0]], ys = [main.a[1], main.b[1]].sort((p, q) => p - q);
+    expect(Math.abs(xs[0] - xs[1])).toBeLessThan(1e-9);
+    expect(Math.abs(xs[0] - 10)).toBeCloseTo(20, 9);
+    expect(ys[0]).toBeCloseTo(0, 9);
+    expect(ys[1]).toBeCloseTo(40, 9);
+  });
+
+  it("is measured in the sketch's units", () => {
+    const { sk, l1, c } = rails();
+    sk.lengthScale = 25;
+    addConstraint(sk, { type: "distance", a: c.id, b: l1.id, mode: "aligned", toLine: true, value: 50, offset: 0 });
+    expect(solver.solve(sk).ok).toBe(true);
+    expect(c.y).toBeCloseTo(2, 6);
+  });
+});

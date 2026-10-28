@@ -173,7 +173,7 @@ const TOOLS: ToolDef[] = [
   { id: "mirror", label: "Mirror", icon: "mirror", tab: "sketch", group: 2 },
   { id: "shift", label: "Linear pattern", short: "Linear", icon: "shift", tab: "sketch", group: 2 },
   { id: "turn", label: "Circular pattern", short: "Circular", icon: "turn", tab: "sketch", group: 2 },
-  { id: "dimension", label: "Dimension", key: "D", icon: "dimension", tab: "sketch", group: 3, need: "a line, two points, two lines, or a circle" },
+  { id: "dimension", label: "Dimension", key: "D", icon: "dimension", tab: "sketch", group: 3, need: "a line, two points, two lines, a point and a line, or a circle" },
   { id: "horizontal", label: "Horizontal", key: "H", icon: "horizontal", tab: "sketch", group: 3, need: "a line, or two points" },
   { id: "vertical", label: "Vertical", key: "V", icon: "vertical", tab: "sketch", group: 3, need: "a line, or two points" },
   { id: "parallel", label: "Parallel", icon: "parallel", tab: "sketch", group: 3, need: "two lines" },
@@ -184,7 +184,7 @@ const TOOLS: ToolDef[] = [
   { id: "tangent", label: "Tangent", key: "T", icon: "tangent", tab: "sketch", group: 3, need: "a line and a circle or arc, or two circles or arcs" },
   { id: "fixed", label: "Fix point", key: "F", icon: "fixed", tab: "sketch", group: 3, need: "a point" },
 
-  { id: "measure", label: "Measure", icon: "measure", tab: "annotate", group: 1, need: "a line, two points, two lines, or a circle" },
+  { id: "measure", label: "Measure", icon: "measure", tab: "annotate", group: 1, need: "a line, two points, two lines, a point and a line, or a circle" },
   { id: "pin", label: "Pin", icon: "pin", tab: "annotate", group: 2 },
   { id: "roller", label: "Roller", icon: "roller", tab: "annotate", group: 2 },
   { id: "wall", label: "Fixed", icon: "wall", tab: "annotate", group: 2 },
@@ -914,11 +914,11 @@ export class App {
       case "dimension":
         return this.canApply("dimension")
           ? "Middle-click, or click empty space, where the dimension should go. Its position picks aligned, horizontal or vertical."
-          : `Dimension: click a line, two points, two lines, or a circle. ${done}`;
+          : `Dimension: click a line, two points, two lines, a point and a line, or a circle. ${done}`;
       case "measure":
         return this.canApply("measure")
           ? "Middle-click, or click empty space, where the measure should go. It shows the value and changes nothing."
-          : `Measure: click a line, two points, two lines, or a circle. Only you see it: it is left out of the figure. ${done}`;
+          : `Measure: click a line, two points, two lines, a point and a line, or a circle. Only you see it: it is left out of the figure. ${done}`;
       case "etalon": return `Click where the etalon starts. Drag its far end to set how long it is, and give it its unit in the side panel. ${done}`;
       case "rightangle":
         return p?.tool === "rightangle" ? "Click the second line, on the side of the corner the mark goes in."
@@ -2657,7 +2657,7 @@ export class App {
    * the figure: the side of the two points that faces away from the middle of
    * the geometry, at the standard distance for the view as it is now.
    */
-  private outsideOffset(a: Point, b: Point, mode: DistanceMode): number {
+  private outsideOffset(a: { x: number; y: number }, b: { x: number; y: number }, mode: DistanceMode): number {
     const mm = this.mm();
     const box = geometryBox(this.sk);
     const centre: V = [(box.x0 + box.x1) / 2, (box.y0 + box.y1) / 2];
@@ -2715,10 +2715,29 @@ export class App {
       return { type: "distance", a: a.id, b: b.id, mode, value: length, offset: dot(sub(at, A), n) };
     }
 
+    // A point and a line, or two lines that run side by side: the distance square to the line.
+    const toLine = (p: Point, l: Line): ConstraintDraft | string => {
+      const P = xy(p), L0 = xy(point(this.sk, l.p1)), L1 = xy(point(this.sk, l.p2));
+      const t = norm(sub(L1, L0));
+      const foot = add(L0, mul(t, dot(sub(P, L0), t)));
+      const gap = dist(P, foot);
+      if (gap < 1e-9) return lines.length === 2 ? "Those lines are in line with each other." : "That point is on the line.";
+      const n = perp(norm(sub(foot, P)));
+      const offset = at ? dot(sub(at, P), n) : this.outsideOffset(p, { x: foot[0], y: foot[1] }, "aligned");
+      return { type: "distance", a: p.id, b: l.id, mode: "aligned", toLine: true, value: gap, offset };
+    };
+    if (pts.length === 1 && lines.length === 1 && !rounds.length) return toLine(pts[0], lines[0]);
+
     if (lines.length === 2 && !pts.length && !rounds.length) {
       let [l1, l2] = lines;
       const ends = (l: Line): [V, V] => [xy(point(this.sk, l.p1)), xy(point(this.sk, l.p2))];
       let [a1, b1] = ends(l1), [a2, b2] = ends(l2);
+      // Side by side, within a degree or so: the distance between them, from the end of the second nearest the pointer.
+      if (Math.abs(cross(norm(sub(b1, a1)), norm(sub(b2, a2)))) < 0.02) {
+        const near = at ?? mid(a1, b1);
+        const p = dist(a2, near) <= dist(b2, near) ? point(this.sk, l2.p1) : point(this.sk, l2.p2);
+        return toLine(p, l1);
+      }
       const vertex = intersectLines(a1, sub(b1, a1), a2, sub(b2, a2));
       if (!vertex) return "Those lines are parallel, so there is no angle to dimension.";
       let rev1: boolean, rev2: boolean;
@@ -2769,7 +2788,7 @@ export class App {
       const a1 = a0 + (wrap(angleOf([t.x - c.x, t.y - c.y]) - a0) || TWO_PI);
       return { type: "radius", target: e.id, value: arcRadius(this.sk, e), angle: (a0 + a1) / 2 };
     }
-    return "Select a line, two points, two lines, or a circle to dimension.";
+    return "Select a line, two points, two lines, a point and a line, or a circle to dimension.";
   }
 
   /**
@@ -3061,7 +3080,7 @@ export class App {
       case "fixed": return P >= 1 && L + R === 0;
       case "dimension":
       case "measure":
-        return (P === 2 && L + R === 0) || (L === 1 && P + R === 0) || (L === 2 && P + R === 0) || (R === 1 && P + L === 0);
+        return (P === 2 && L + R === 0) || (L === 1 && P + R === 0) || (L === 2 && P + R === 0) || (P === 1 && L === 1 && R === 0) || (R === 1 && P + L === 0);
     }
   }
 
@@ -3985,11 +4004,11 @@ export class App {
       html += `<p class="muted">Middle-click or Esc returns to Select.</p>`;
     } else if (cons.length === 1 && entities === 0 && !syms.length && isDimension(cons[0]) && cons[0].measure) {
       const d = cons[0];
-      const what = d.type === "distance" ? (d.mode === "aligned" ? "Length" : d.mode === "horizontal" ? "Horizontal distance" : "Vertical distance") : d.type === "angle" ? "Angle" : "Radius";
+      const what = d.type === "distance" ? (d.toLine ? "Distance to the line" : d.mode === "aligned" ? "Length" : d.mode === "horizontal" ? "Horizontal distance" : "Vertical distance") : d.type === "angle" ? "Angle" : "Radius";
       html += `<h2>Measure</h2>`;
       html += `<p class="measure-value"><span>${what}</span><b>${this.shownValue(d)}${d.type === "angle" ? "°" : ""}</b></p>`;
       html += `<p class="muted note-block">Shows what the geometry measures now, and follows it as it changes. It drives nothing, and only you see it: it is left out of the print and the exported figure. Drag it to move it.</p>`;
-      if (d.type === "distance") {
+      if (d.type === "distance" && !d.toLine) {
         const modes: [DistanceMode, string][] = [["aligned", "Aligned"], ["horizontal", "Horizontal"], ["vertical", "Vertical"]];
         html += `<div class="field"><span id="mode-label">Measured</span><div class="segmented" role="group" aria-labelledby="mode-label">${modes.map(([m, name]) =>
           `<button type="button" data-mode="${m}" aria-pressed="${d.mode === m}">${name}</button>`).join("")}</div></div>`;
@@ -4003,7 +4022,8 @@ export class App {
       html += `<label class="field"><span>Label</span><input data-field="label" type="text" spellcheck="false" placeholder="2a, F_1, \\alpha" value="${esc(d.label ?? "")}" data-tex="math"><small>Shown in the figure instead of the number. Written as TeX math; spaces you type are kept. Clicking the number on the drawing edits it in place.</small></label>`;
       if (d.type === "distance") {
         const modes: [DistanceMode, string][] = [["aligned", "Aligned"], ["horizontal", "Horizontal"], ["vertical", "Vertical"]];
-        html += `<div class="field"><span id="mode-label">Measured</span><div class="segmented" role="group" aria-labelledby="mode-label">${modes.map(([m, name]) =>
+        if (d.toLine) html += `<p class="muted note-block">Measured square to the line, from the point it starts at. Drag it along the lines to move it.</p>`;
+        else html += `<div class="field"><span id="mode-label">Measured</span><div class="segmented" role="group" aria-labelledby="mode-label">${modes.map(([m, name]) =>
           `<button type="button" data-mode="${m}" aria-pressed="${d.mode === m}">${name}</button>`).join("")}</div></div>`;
         if (d.mode !== "horizontal") {
           const along = (d.text ?? (d.mode === "aligned" ? "along" : "upright")) === "along";
@@ -4660,7 +4680,7 @@ export class App {
 
   private setDimMode(mode: DistanceMode): void {
     const d = this.selectedDimension();
-    if (!d || d.type !== "distance" || d.mode === mode) return;
+    if (!d || d.type !== "distance" || d.mode === mode || d.toLine) return;
     const before = clone(this.sk);
     const a = point(this.sk, d.a), b = point(this.sk, d.b);
     // Keep the geometry where it is: the value becomes what the new direction measures now.
