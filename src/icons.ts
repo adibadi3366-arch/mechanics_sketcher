@@ -92,6 +92,13 @@ export const ICONS: Record<string, string> = {
   spiral: `<path d="M9.3 11.2L9.6 11.4L10 11.5L10.4 11.4L10.9 11.1L11.2 10.6L11.3 10L11.2 9.4L10.9 8.7L10.3 8.2L9.5 8L8.6 8L7.7 8.4L7 9.1L6.5 10.1L6.5 11.2L6.8 12.3L7.5 13.3L8.6 14L9.9 14.3L11.3 14.1L12.6 13.4L13.6 12.2L14.1 10.7L14.1 9.1L13.5 7.5L12.4 6.2L10.8 5.4L8.9 5.1L7.1 5.5L5.4 6.6L4.2 8.2L3.6 10.2L3.7 12.3L4.7 14.3L6.2 15.9L8.3 16.9L10.7 17.1L13 16.5L15 15L16.5 12.9" stroke-width="1.3"/>`,
   arcdamper: `<path d="M15.2 17.2L15 15.6L14.7 14.1L14.2 12.6L13.4 11.2L12.6 9.9L11.5 8.7M13.1 7.1L9.9 10.3M11.1 13.6L10.5 12.5L9.7 11.4L8.8 10.5L7.7 9.7L6.6 9.1L9.4 3.3L11.3 4.4L13 5.7L14.5 7.2L15.8 8.9L16.9 10.8M8 6.2L6.4 5.6L4.7 5.2L3 5" stroke-width="1.3"/>${dot(3.2, 17, 1.4)}`,
   mass: `<circle cx="10" cy="10" r="6.500" stroke-width="1.3"/><path d="M10 10V3.500A6.500 6.500 0 0 1 16.500 10zM10 10v6.500A6.500 6.500 0 0 1 3.500 10z" fill="currentColor" stroke="none"/>`,
+  // Project: an edge of another sketch, brought down onto this one, where it lands dashed.
+  project: `<path d="M3 4.5h14" stroke-width="1.4"/><path d="M3 15.5h14" stroke-dasharray="2.2 2"/><path d="M10 6.5v6M7.6 10.4L10 12.8l2.4-2.4"/>`,
+  // The sketch strip: an eye struck through, for a hidden sketch, and a page, for one that is in the figure.
+  eyeoff: `<path d="M2 10s3-5.5 8-5.5S18 10 18 10s-3 5.5-8 5.5S2 10 2 10z"/><circle cx="10" cy="10" r="2.4"/><path d="M3.5 16.5l13-13"/>`,
+  page: `<path d="M5 2.5h7l3.5 3.5v11.5H5z"/><path d="M12 2.5V6h3.5M7.5 10h5M7.5 13h5"/>`,
+  pageoff: `<path d="M5 2.5h7l3.5 3.5v11.5H5z"/><path d="M12 2.5V6h3.5"/><path d="M3.5 16.5l13-13"/>`,
+  plus: `<path d="M10 4v12M4 10h12"/>`,
 };
 
 export function icon(name: string, size = 20): string {

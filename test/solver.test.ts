@@ -327,3 +327,47 @@ describe("model", () => {
     expect(() => deserialize('{"hello":1}')).toThrow();
   });
 });
+
+describe("freedom by pulling", () => {
+  /** A random sketch: a chain of lines with some constraints, some dimensions, some circles. */
+  function random(seed: number) {
+    let s = seed;
+    const rnd = () => { s = (s * 1103515245 + 12345) % 2147483648; return s / 2147483648; };
+    const sk = emptySketch();
+    const pts = Array.from({ length: 10 }, (_, i) => addPoint(sk, i * 2 + rnd(), rnd() * 4));
+    const lines = [];
+    for (let i = 0; i < pts.length - 1; i++) lines.push(addLine(sk, pts[i].id, pts[i + 1].id));
+    const cs = [addCircle(sk, pts[2].id, 1 + rnd()), addCircle(sk, addPoint(sk, 5, 8).id, 1.5)];
+    addConstraint(sk, { type: "fixed", p: pts[0].id });
+    // Most lines get a direction and a length, so a run of them from the fixed end is pinned down until one is not.
+    for (const l of lines) {
+      const k = rnd();
+      if (k < 0.4) addConstraint(sk, { type: "horizontal", a: l.p1, b: l.p2 });
+      else if (k < 0.8) addConstraint(sk, { type: "vertical", a: l.p1, b: l.p2 });
+      if (rnd() < 0.8) {
+        const a = point(sk, l.p1), b = point(sk, l.p2);
+        addConstraint(sk, { type: "distance", a: l.p1, b: l.p2, mode: "aligned", value: Math.hypot(b.x - a.x, b.y - a.y), offset: 1 });
+      }
+    }
+    if (rnd() < 0.5) addConstraint(sk, { type: "radius", target: cs[0].id, value: cs[0].r, angle: 0 });
+    if (rnd() < 0.5) addConstraint(sk, { type: "fixed", p: pts[9].id });
+    return sk;
+  }
+
+  it("finds the same free points and circles as pinning each in turn", () => {
+    const pinning = solver.freedomByPinning.bind(solver);
+    let fellBack = 0;
+    for (let seed = 1; seed <= 40; seed++) {
+      const sk = random(seed);
+      if (!solver.solve(sk).ok) continue;
+      solver.freedomByPinning = (x: Sketch) => { fellBack++; return pinning(x); };
+      const fast = solver.freedom(sk)!;
+      solver.freedomByPinning = pinning;
+      const exact = solver.freedomByPinning(sk)!;
+      expect([...fast.points].sort(), `seed ${seed}`).toEqual([...exact.points].sort());
+      expect([...fast.radii].sort(), `seed ${seed}`).toEqual([...exact.radii].sort());
+    }
+    // The pull answered every time, without pinning point by point.
+    expect(fellBack).toBe(0);
+  });
+});

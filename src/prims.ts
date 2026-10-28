@@ -62,6 +62,9 @@ export const PAPER = {
   rightAngle: 2.2,      // side of the square that marks a right angle
 };
 
+/** The colour geometry projected from another sketch is drawn in. It is never part of the figure. */
+export const REF_INK = "#d9480f";
+
 /** The colour a measure is drawn in, in the editor: it is never part of the figure. */
 export const MEASURE_INK = "#0b7285";
 
@@ -1288,6 +1291,8 @@ export function buildPrims(sk: Sketch, mm: number, opts: BuildOptions): Prim[] {
     if (e.dashed && !e.construction) base.dash = DASHED;
     // A colour of its own: its line, an arrow's head and its name. A construction line keeps the editor's colours.
     if (e.color && !e.construction) base.ink = e.color;
+    // Projected from another sketch: in a colour of its own, as reference geometry is in CAD.
+    if (e.ref) base.ink = REF_INK;
     const named = isNamed(e) ? e : null;
     const name = (): void => {
       const at = named ? arrowLabelAt(sk, named, mm) : null;

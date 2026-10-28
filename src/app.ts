@@ -5,7 +5,7 @@ import {
   type Sketch, type Id, type Point, type Line, type Circle, type Arc, type Curve, type Constraint,
   type ConstraintDraft, type Dimension, type DistanceMode, type Sym, type SupportKind, type LeaderEnd,
   type ArrowEnds, type Datum, type BalloonFrame, type AnyLoad, type LoadKind, type Diagram, type Plot, isLoad, loadKind, geometryExtent,
-  type LineElement, type ElementLook, isNamed,
+  type LineElement, type ElementLook, type Entity, isNamed, arcAngles, newId,
   ORIGIN, emptySketch, entity, point, constraint, symbol, symbolRefs, points, curves, curvePoints,
   constraintRefs, isDimension, isLengthDimension, unitScale, isLink, isFixed, arcRadius, addPoint, addLine, addCircle, addArc, addConstraint,
   addSupport, addFrame, addSymbol, remove, serialize, deserialize, clone,
@@ -14,7 +14,7 @@ import { SketchSolver, type Drag, type SolveResult, type Freedom } from "./solve
 import { History } from "./history";
 import {
   type V, add, sub, mul, dot, cross, norm, perp, mid, dist, angleOf, polar, wrap, inSweep,
-  type Box, projectOnSegment, intersectLines, boxIsEmpty, grow, TWO_PI,
+  type Box, projectOnSegment, intersectLines, distToSegment, boxIsEmpty, grow, TWO_PI,
 } from "./geom";
 import {
   type Prim, PAPER, printMm, geometryBox, buildPrims, dimensionPrims,
@@ -32,6 +32,8 @@ import { type CopyResult, PATTERN_MAX, mirrorCopy, linearCopy, circularCopy, nex
 import { type FittedFigure, FIGURE_MARGIN, toSvg, toTikz, fitFigure } from "./export";
 import { icon } from "./icons";
 import { showTexFields } from "./texfield";
+import { numberBox, showInBox } from "./slidernum";
+import { type Drawing, type Part, splitDrawing, mergeDrawing, activePart, shareSettings, entityIndex, followSources, isOrphan } from "./parts";
 import { BETA, EXPORT_WAIT_SECONDS, NEWS_ID, REPORT_EMAIL, SUPPORT_URL } from "./config";
 import { news } from "./news";
 import { type ReportKind, composeReport } from "./report";
@@ -58,7 +60,7 @@ type Command =
   | "horizontal" | "vertical" | "parallel" | "perpendicular" | "equal" | "coincident"
   | "midpoint" | "tangent" | "fixed" | "dimension" | "measure";
 /** A constraint or the dimension command is a tool too: pick it, then the geometry. */
-type Tool = "select" | DrawTool | "trim" | CopyTool | SymbolTool | Command;
+type Tool = "select" | DrawTool | "trim" | "project" | CopyTool | SymbolTool | Command;
 /** Sketch holds what shapes the geometry; Annotate what is added to the figure; Dynamics what a model that moves is drawn with. */
 /** Plot is a workspace of its own: its tab swaps the sketch for the plots that are kept with it. */
 type Tab = "sketch" | "annotate" | "dynamics" | "plot";
@@ -170,6 +172,7 @@ const TOOLS: ToolDef[] = [
   { id: "beam", label: "Beam", icon: "beam", tab: "sketch", group: 1 },
   { id: "arcbeam", label: "Curved beam", short: "Curved", icon: "arcbeam", tab: "sketch", group: 1 },
   { id: "trim", label: "Trim", key: "X", icon: "trim", tab: "sketch", group: 2 },
+  { id: "project", label: "Project", icon: "project", tab: "sketch", group: 2 },
   { id: "mirror", label: "Mirror", icon: "mirror", tab: "sketch", group: 2 },
   { id: "shift", label: "Linear pattern", short: "Linear", icon: "shift", tab: "sketch", group: 2 },
   { id: "turn", label: "Circular pattern", short: "Circular", icon: "turn", tab: "sketch", group: 2 },
@@ -297,6 +300,7 @@ const EDIT_SCALE_MIN = 50, EDIT_SCALE_MAX = 250;
 
 /** Range of the dimension size slider, in percent. */
 const DIM_SCALE_MIN = 30, DIM_SCALE_MAX = 300;
+
 /** Where the released app keeps the sketch being worked on. */
 const LIVE_AUTOSAVE_KEY = "mech-sketch.autosave";
 /** The beta keeps its own: a sketch with something new in it would not open whole in the released app. */
@@ -345,6 +349,10 @@ export class App {
    */
   private readonly returning = hasStored(AUTOSAVE_KEY);
   sk: Sketch = emptySketch();
+  /** The sketches of the drawing. The one being worked on is `sk`; the drawing's copy of it is brought up to date when the drawing is saved or another sketch is opened. */
+  private drawing: Drawing = splitDrawing(this.sk);
+  /** What the Project tool would take, under the pointer: an entity of another sketch. */
+  private projectHover: Id | null = null;
   private history = new History();
   private result: SolveResult = { ok: true, dof: 0, conflicting: [], redundant: [] };
 
@@ -432,7 +440,7 @@ export class App {
     this.resize();
     this.fit();
     this.solve();
-    this.history.reset(this.sk);
+    this.history.reset(this.whole());
     this.render();
     this.greet();
   }
@@ -612,18 +620,66 @@ export class App {
     return this.result;
   }
 
+  /** The whole drawing as one sketch: what is saved, undone and redone. */
+  private whole(): Sketch {
+    return mergeDrawing(this.drawing, this.sk);
+  }
+
+  /** The sketches that are in the exported figure, as one sketch. */
+  private figureSketch(): Sketch {
+    return mergeDrawing(this.drawing, this.sk, true);
+  }
+
+  /** Opens a drawing: its sketches, and the one that was being worked on. */
+  private loadDrawing(all: Sketch): void {
+    this.drawing = splitDrawing(all);
+    this.sk = activePart(this.drawing).sk;
+  }
+
+  /** The other sketches, as they are now. */
+  private otherParts(): Part[] {
+    return this.drawing.parts.filter((p) => p.info.id !== this.drawing.active);
+  }
+
+  /** Every constraint of the drawing, in every sketch. */
+  private allConstraints(): Constraint[] {
+    return [...this.sk.constraints, ...this.otherParts().flatMap((p) => p.sk.constraints)];
+  }
+
+  /**
+   * The sketches after the one being worked on follow what they projected
+   * from it: their projections move to where the sources are now, and each
+   * that moved is solved again. None before it can depend on it.
+   */
+  private followDownstream(): void {
+    const parts = this.drawing.parts;
+    const from = parts.findIndex((p) => p.info.id === this.drawing.active);
+    let index: Map<Id, import("./model").Entity> | null = null;
+    for (const p of parts.slice(from + 1)) {
+      if (!p.sk.entities.some((e) => e.ref)) continue;
+      index ??= entityIndex(this.drawing, this.sk);
+      shareSettings(this.sk, p.sk);
+      if (followSources(p.sk, index)) this.solver.solve(p.sk);
+    }
+  }
+
   /** Records the current sketch as an undo step and saves it. */
   private commit(): void {
     this.freedomStale = true;
-    settleLengthScale(this.sk);
-    this.history.commit(this.sk);
+    // The scale belongs to the drawing: the first length dimension in any sketch sets it.
+    const all = this.whole();
+    settleLengthScale(all);
+    if (all.lengthScale === undefined) delete this.sk.lengthScale;
+    else this.sk.lengthScale = all.lengthScale;
+    this.followDownstream();
+    this.history.commit(this.whole());
     this.autosave();
     this.touch();
   }
 
   private autosave(): void {
     try {
-      localStorage.setItem(AUTOSAVE_KEY, serialize(this.sk));
+      localStorage.setItem(AUTOSAVE_KEY, serialize(this.whole()));
     } catch {
       // Storage can be unavailable (private window, file:// in some browsers).
     }
@@ -633,7 +689,7 @@ export class App {
     try {
       // The beta starts out from the sketch the released app was left with, and goes its own way from there.
       const saved = localStorage.getItem(AUTOSAVE_KEY) ?? (BETA ? localStorage.getItem(LIVE_AUTOSAVE_KEY) : null);
-      if (saved) this.sk = deserialize(saved);
+      if (saved) this.loadDrawing(deserialize(saved));
       this.exportName = localStorage.getItem(EXPORT_NAME_KEY) || this.exportName;
       this.sketchName = localStorage.getItem(SKETCH_NAME_KEY) || this.sketchName;
       const scale = Number(localStorage.getItem(EDIT_SCALE_KEY));
@@ -642,7 +698,7 @@ export class App {
         this.showEditScale();
       }
     } catch {
-      this.sk = emptySketch();
+      this.loadDrawing(emptySketch());
     }
   }
 
@@ -661,7 +717,8 @@ export class App {
   }
 
   private replaceSketch(sk: Sketch): void {
-    this.sk = sk;
+    this.loadDrawing(sk);
+    this.projectHover = null;
     this.freedomStale = true;
     this.pruneSelection();
     this.pending = null;
@@ -688,14 +745,14 @@ export class App {
 
   /** True when nothing has been drawn: only the origin is there. */
   private isBlank(): boolean {
-    return this.sk.entities.length <= 1 && !this.sk.symbols.length;
+    return [this.sk, ...this.otherParts().map((p) => p.sk)].every((sk) => sk.entities.length <= 1 && !sk.symbols.length);
   }
 
   // ---- drawing the screen -----------------------------------------------------
 
   private draw(): void {
     if (this.tab === "plot") return this.drawPlot();
-    this.fig = this.preview ? fitFigure(this.sk) : null;
+    this.fig = this.preview ? fitFigure(this.figureSketch()) : null;
     const mm = this.mm();
     this.prims = this.fig ? this.fig.prims : buildPrims(this.sk, mm, { editor: !this.preview });
     this.glyphs = this.preview ? [] : layoutGlyphs(this.sk, this.view, this.glyphFilter());
@@ -714,11 +771,11 @@ export class App {
       freeIds: this.preview ? new Set() : this.freeIds(), overlaps: findOverlaps(this.sk),
       preview: this.previewShapes(), snap: this.snapMark,
       box: this.drag?.kind === "box" ? { a: this.drag.a, b: this.drag.b } : null,
-      grips: this.grips(mm), plain: this.preview, page: this.pageMark(),
+      grips: this.grips(mm), plain: this.preview, page: this.pageMark(), under: this.preview ? "" : this.otherSketches(),
     });
 
     this.emptyEl.hidden = !this.isBlank() || this.pending !== null || this.tool !== "select";
-    this.svg.dataset.tool = this.tool === "select" ? "select" : isCommand(this.tool) || this.tool === "mirror" ? "pick" : "draw";
+    this.svg.dataset.tool = this.tool === "select" ? "select" : isCommand(this.tool) || this.tool === "mirror" || this.tool === "project" ? "pick" : "draw";
     this.svg.classList.toggle("panning", this.drag?.kind === "pan" || this.spaceKey);
     this.svg.classList.toggle("over", this.tool === "select" && this.hover !== null && !this.drag);
 
@@ -730,6 +787,7 @@ export class App {
       this.chromeDirty = false;
       this.drawPanel();
       this.drawTitleblock();
+      this.drawStrip();
       this.updateButtons();
     }
     if (this.editing) this.placeEditor();
@@ -872,6 +930,7 @@ export class App {
         return p ? "Click where the line ends. Hold Alt to switch snapping off."
           : `Click where the ${this.tool === "line" ? "line" : "centre line"} starts. ${done}`;
       case "trim": return `Click the part of a line, circle or arc to remove, up to where other curves cross it. Or hold the button and drag across everything that should go. ${done}`;
+      case "project": return `Click a line, circle, arc or point of a sketch to the left of this one to bring it in as reference geometry, which follows it. ${done}`;
       case "beam":
         if (p?.tool !== "beam") return `Click where the beam starts: a joint, or anywhere. ${done}`;
         return p.b ? "Move away from the beam's middle line to set how wide it is, then click." : "Click where the beam ends. Hold Alt to switch snapping off.";
@@ -1392,6 +1451,12 @@ export class App {
   }
 
   private setTool(t: Tool): void {
+    if (t === "project" && this.drawing.parts[0].info.id === this.drawing.active) {
+      this.showTip("project");
+      return this.toast(this.drawing.parts.length > 1
+        ? "Project takes geometry from the sketches to the left of this one, and this is the first."
+        : "Project takes geometry from another sketch. Add one with + Sketch in the strip at the bottom, and project from this one into it.");
+    }
     if (isCopyTool(t) && !this.copyReady(toolDef(t).label)) {
       // Not picked up, but asked for: this is when its tip is wanted.
       return this.showTip(t);
@@ -1605,6 +1670,277 @@ export class App {
     if (full && n >= 2) angle.value = formatNumber(Number((360 / n).toFixed(3)));
   }
 
+  // ---- sketches ------------------------------------------------------------------
+
+  /** A curve of another sketch as an SVG path on screen. */
+  private curvePath(sk: Sketch, e: Curve): string {
+    const S = (q: V) => toScreen(this.view, q);
+    const xy = (id: Id): V => { const p = point(sk, id); return [p.x, p.y]; };
+    if (e.type === "line") {
+      const a = S(xy(e.p1)), b = S(xy(e.p2));
+      return `M${a[0].toFixed(1)} ${a[1].toFixed(1)}L${b[0].toFixed(1)} ${b[1].toFixed(1)}`;
+    }
+    const c = S(xy(e.c));
+    if (e.type === "circle") {
+      const r = (e.r * this.view.scale).toFixed(1);
+      return `M${(c[0] - e.r * this.view.scale).toFixed(1)} ${c[1].toFixed(1)}a${r} ${r} 0 1 0 ${(2 * e.r * this.view.scale).toFixed(1)} 0a${r} ${r} 0 1 0 ${(-2 * e.r * this.view.scale).toFixed(1)} 0`;
+    }
+    const r = arcRadius(sk, e), { a0, a1 } = arcAngles(sk, e);
+    const a = S(polar(xy(e.c), r, a0)), b = S(polar(xy(e.c), r, a1)), rs = (r * this.view.scale).toFixed(1);
+    // Counter-clockwise in the drawing is clockwise on screen, where y points down.
+    return `M${a[0].toFixed(1)} ${a[1].toFixed(1)}A${rs} ${rs} 0 ${a1 - a0 > Math.PI ? 1 : 0} 0 ${b[0].toFixed(1)} ${b[1].toFixed(1)}`;
+  }
+
+  /** The sketches not being worked on, as thin lines: no dimensions, constraints or symbols. Those the Project tool can take from light up under the pointer. */
+  private otherSketches(): string {
+    const parts = this.drawing.parts;
+    const here = parts.findIndex((p) => p.info.id === this.drawing.active);
+    let out = "";
+    parts.forEach((p, i) => {
+      if (i === here || p.info.hidden) return;
+      const pickable = this.tool === "project" && i < here;
+      for (const e of p.sk.entities) {
+        if (e.type === "point" || e.construction) continue;
+        out += `<path class="other${pickable ? " pickable" : ""}${this.projectHover === e.id ? " hov" : ""}" d="${this.curvePath(p.sk, e)}"/>`;
+      }
+      if (!pickable) return;
+      for (const q of this.projectablePoints(p.sk)) {
+        const at = toScreen(this.view, [q.x, q.y]);
+        out += `<circle class="other-pt${this.projectHover === q.id ? " hov" : ""}" cx="${at[0].toFixed(1)}" cy="${at[1].toFixed(1)}" r="${this.projectHover === q.id ? 4.2 : 2.6}"/>`;
+      }
+    });
+    return out;
+  }
+
+  /** The points of another sketch that can be projected: the ends and centres of what is drawn, and points placed on their own. */
+  private projectablePoints(sk: Sketch): Point[] {
+    const ids = new Set<Id>();
+    for (const e of sk.entities) {
+      if (e.type === "point") { if (e.standalone && e.id !== ORIGIN) ids.add(e.id); continue; }
+      if (!e.construction) curvePoints(e).forEach((id) => ids.add(id));
+    }
+    ids.delete(ORIGIN);
+    return sk.entities.filter((e): e is Point => e.type === "point" && ids.has(e.id));
+  }
+
+  /** The geometry of another sketch on show under a screen position, points first. */
+  private otherAt(sp: V): { part: Part; entity: Entity } | null {
+    let best: { part: Part; entity: Entity; d: number; rank: number } | null = null;
+    const offer = (part: Part, entity: Entity, d: number, rank: number) => {
+      if (!best || rank < best.rank || (rank === best.rank && d < best.d)) best = { part, entity, d, rank };
+    };
+    for (const part of this.otherParts()) {
+      if (part.info.hidden) continue;
+      const sk = part.sk;
+      const S = (id: Id): V => { const p = point(sk, id); return toScreen(this.view, [p.x, p.y]); };
+      for (const q of this.projectablePoints(sk)) {
+        const d = dist(S(q.id), sp);
+        if (d < POINT_TOL) offer(part, q, d, 0);
+      }
+      for (const e of sk.entities) {
+        if (e.type === "point" || e.construction) continue;
+        let d: number;
+        if (e.type === "line") d = distToSegment(sp, S(e.p1), S(e.p2));
+        else {
+          const c = S(e.c), r = (e.type === "circle" ? e.r : arcRadius(sk, e)) * this.view.scale;
+          d = Math.abs(dist(sp, c) - r);
+          if (e.type === "arc") {
+            // Off the arc's sweep, only its ends are near.
+            const m = toModel(this.view, sp), centre = point(sk, e.c), { a0, a1 } = arcAngles(sk, e);
+            if (!inSweep(angleOf([m[0] - centre.x, m[1] - centre.y]), a0, a1)) d = Infinity;
+          }
+        }
+        if (d < 7) offer(part, e, d, 1);
+      }
+    }
+    return best;
+  }
+
+  /**
+   * The Project tool takes what is under the pointer in a sketch to the left
+   * of this one and brings it in as reference geometry: fixed where its
+   * source is, following it when that moves, in a colour of its own and left
+   * out of the figure. Lines, circles and arcs come with their points, and a
+   * point already brought in is used again, so projected edges stay joined.
+   */
+  private projectClick(sp: V): void {
+    const hit = this.otherAt(sp);
+    if (!hit) return;
+    const parts = this.drawing.parts;
+    if (parts.indexOf(hit.part) > parts.findIndex((p) => p.info.id === this.drawing.active)) {
+      return this.toast("Only sketches to the left of this one can be projected from, so a sketch never ends up depending on itself.");
+    }
+    const sk = this.sk, from = hit.part.sk, src = hit.entity;
+    if (sk.entities.some((e) => e.ref === src.id)) return this.toast("That is in this sketch already.");
+    const pointFor = (id: Id): Id => {
+      const had = sk.entities.find((e) => e.type === "point" && e.ref === id);
+      if (had) return had.id;
+      const q = point(from, id);
+      const p = addPoint(sk, q.x, q.y);
+      p.ref = id;
+      return p.id;
+    };
+    if (src.type === "point") {
+      const p = point(sk, pointFor(src.id));
+      p.standalone = true;
+    } else {
+      const made = src.type === "line" ? addLine(sk, pointFor(src.p1), pointFor(src.p2))
+        : src.type === "circle" ? addCircle(sk, pointFor(src.c), src.r)
+        : addArc(sk, pointFor(src.c), pointFor(src.p1), pointFor(src.p2));
+      made.construction = true;
+      made.ref = src.id;
+    }
+    this.projectHover = null;
+    this.solve();
+    this.commit();
+  }
+
+  /** The name of the sketch an entity was projected from, if it is still there. */
+  private sourceName(ref: Id): string | null {
+    const part = this.otherParts().find((p) => p.sk.entities.some((e) => e.id === ref));
+    return part ? part.info.name : null;
+  }
+
+  /** Turns projected geometry into geometry of this sketch's own, which no longer follows its source. */
+  private breakLinks(ids: Id[]): void {
+    for (const id of ids) {
+      const e = entity(this.sk, id);
+      if (!e?.ref) continue;
+      delete e.ref;
+      if (e.type !== "point") for (const p of curvePoints(e)) {
+        const q = entity(this.sk, p);
+        // An end shared with another projection keeps following its source.
+        if (q?.ref && !this.sk.entities.some((x) => x !== e && x.type !== "point" && x.ref && curvePoints(x).includes(p))) delete q.ref;
+      }
+    }
+    this.solve();
+    this.commit();
+  }
+
+  /** The strip at the bottom: one tab for each sketch, and one to add another. */
+  private drawStrip(): void {
+    const strip = $("#sheets");
+    const one = this.drawing.parts.length === 1;
+    strip.innerHTML = this.drawing.parts.map((p) => {
+      const on = p.info.id === this.drawing.active;
+      return `<div class="sheet${on ? " on" : ""}${p.info.hidden && !on ? " gone" : ""}${p.info.out ? " out" : ""}" data-part="${p.info.id}">` +
+        `<button type="button" class="sheet-name" role="tab" aria-selected="${on}" data-sheet="open" title="${on ? "Double-click to rename" : "Work on this sketch"}">${esc(p.info.name)}</button>` +
+        `<button type="button" class="sheet-btn" data-sheet="hide" aria-pressed="${!!p.info.hidden}"${on ? " disabled" : ""} title="${on ? "The sketch being worked on is always shown" : p.info.hidden ? "Hidden while you work on another sketch: show it" : "Hide it while you work on another sketch"}">${icon(p.info.hidden && !on ? "eyeoff" : "eye", 15)}</button>` +
+        `<button type="button" class="sheet-btn" data-sheet="out" aria-pressed="${!p.info.out}" title="${p.info.out ? "Left out of the exported figure: put it in" : "In the exported figure: leave it out"}">${icon(p.info.out ? "pageoff" : "page", 15)}</button>` +
+        (on && !one ? `<button type="button" class="sheet-btn" data-sheet="delete" title="Delete this sketch">${icon("close", 13)}</button>` : "") +
+        `</div>`;
+    }).join("") +
+      `<button type="button" class="sheet-add" data-sheet="add" title="A new sketch, after the others">${icon("plus", 14)}<span>Sketch</span></button>`;
+  }
+
+  /** Works on another sketch: this one goes to thin lines, that one comes up with everything in it. */
+  private openSketch(id: Id): void {
+    if (id === this.drawing.active) return;
+    const next = this.drawing.parts.find((p) => p.info.id === id);
+    if (!next) return;
+    this.closeEditor();
+    this.pending = null;
+    this.drag = null;
+    this.selection.clear();
+    this.hover = null;
+    this.projectHover = null;
+    if (this.tool === "project" && this.drawing.parts.indexOf(next) === 0) this.setTool("select");
+    activePart(this.drawing).sk = this.sk;
+    shareSettings(this.sk, next.sk);
+    this.drawing.active = id;
+    this.sk = next.sk;
+    delete next.info.hidden;
+    if (followSources(this.sk, entityIndex(this.drawing, this.sk))) this.solve();
+    this.solve();
+    this.freedomStale = true;
+    this.autosave();
+    this.touch();
+  }
+
+  /** Starts a new sketch after the others, and works on it. */
+  private addSketch(): void {
+    activePart(this.drawing).sk = this.sk;
+    const taken = new Set(this.drawing.parts.map((p) => p.info.name));
+    let n = this.drawing.parts.length + 1;
+    while (taken.has(`Sketch ${n}`)) n++;
+    const sk = { entities: [this.sk.entities.find((e) => e.id === ORIGIN)!], constraints: [], symbols: [] } as unknown as Sketch;
+    shareSettings(this.sk, sk);
+    const info = { id: newId(this.sk, "sketch"), name: `Sketch ${n}` };
+    sk.nextId = this.sk.nextId;
+    this.drawing.parts.push({ info, sk });
+    this.openSketch(info.id);
+    this.commit();
+    this.showTip("sketches");
+  }
+
+  /** Deletes the sketch being worked on. What later sketches projected from it stays where it was, as their own. */
+  private deleteSketch(): void {
+    const parts = this.drawing.parts;
+    if (parts.length < 2) return;
+    const i = parts.findIndex((p) => p.info.id === this.drawing.active);
+    const gone = parts[i];
+    const next = parts[i + 1] ?? parts[i - 1];
+    this.openSketch(next.info.id);
+    this.drawing.parts = parts.filter((p) => p !== gone);
+    this.commit();
+    this.toast(`${gone.info.name} is deleted. Undo brings it back.`);
+  }
+
+  /** Renames a sketch, in place on its tab. */
+  private renameSketch(id: Id): void {
+    const tab = $("#sheets").querySelector<HTMLElement>(`[data-part="${id}"] .sheet-name`);
+    const part = this.drawing.parts.find((p) => p.info.id === id);
+    if (!tab || !part) return;
+    const box = document.createElement("input");
+    box.className = "sheet-rename";
+    box.value = part.info.name;
+    box.setAttribute("aria-label", "Name of the sketch");
+    tab.replaceWith(box);
+    box.focus();
+    box.select();
+    let done = false;
+    const finish = (keep: boolean) => {
+      if (done) return;
+      done = true;
+      const name = box.value.trim();
+      if (keep && name && name !== part.info.name) {
+        part.info.name = name;
+        this.commit();
+      }
+      this.drawStrip();
+    };
+    box.addEventListener("keydown", (e) => {
+      e.stopPropagation();
+      if (e.key === "Enter") finish(true);
+      else if (e.key === "Escape") finish(false);
+    });
+    box.addEventListener("blur", () => finish(true));
+  }
+
+  /** What a click on the strip asks for. */
+  private onStrip(e: MouseEvent): void {
+    const btn = (e.target as HTMLElement).closest<HTMLElement>("[data-sheet]");
+    if (!btn) return;
+    const id = btn.closest<HTMLElement>("[data-part]")?.dataset.part;
+    const part = this.drawing.parts.find((p) => p.info.id === id);
+    switch (btn.dataset.sheet) {
+      case "add": return this.addSketch();
+      case "open": return id ? this.openSketch(id) : undefined;
+      case "delete": return this.deleteSketch();
+      case "hide":
+        if (!part || part.info.id === this.drawing.active) return;
+        if (part.info.hidden) delete part.info.hidden;
+        else part.info.hidden = true;
+        this.projectHover = null;
+        return this.commit();
+      case "out":
+        if (!part) return;
+        if (part.info.out) delete part.info.out;
+        else part.info.out = true;
+        return this.commit();
+    }
+  }
+
   // ---- trim --------------------------------------------------------------------
 
   /** What a trim at this screen position would remove, if there is a curve there. */
@@ -1612,7 +1948,9 @@ export class App {
     // The nearest curve, whatever joints are close by: a point under the pointer is not in the
     // way of the piece of line beside it.
     const hit = this.hitCandidates(sp, true).find((h) => h.kind === "curve");
-    return hit ? planTrim(this.sk, hit.id, toModel(this.view, sp)) : null;
+    // Projected geometry is its source's: it is trimmed there, not here.
+    if (!hit || entity(this.sk, hit.id)?.ref) return null;
+    return planTrim(this.sk, hit.id, toModel(this.view, sp));
   }
 
   /** Carries out a trim and settles the sketch. It is recorded when the button is let go. */
@@ -2276,6 +2614,11 @@ export class App {
       this.touch();
       return;
     }
+    if (this.tool === "project") {
+      this.projectClick(sp);
+      this.touch();
+      return;
+    }
     if (this.tool !== "select") {
       this.toolClick(sp);
       this.updateSnapMark();
@@ -2451,6 +2794,8 @@ export class App {
       this.hover = this.hitTest(sp, true)?.id ?? null;
     } else if (this.tool === "trim") {
       this.trimPlan = this.trimAt(sp);
+    } else if (this.tool === "project") {
+      this.projectHover = this.otherAt(sp)?.entity.id ?? null;
     } else {
       const p = this.pending;
       if ((p?.tool === "arc" && p.start) || (p?.tool === "arcbeam" && p.start && !p.end)) {
@@ -2849,7 +3194,7 @@ export class App {
     const old = d.value;
     d.value = v;
     // The only length dimension there is has nothing to be measured against: it says what its line is worth, and nothing moves.
-    const only = isLengthDimension(d) && this.sk.constraints.filter(isLengthDimension).length === 1;
+    const only = isLengthDimension(d) && this.allConstraints().filter(isLengthDimension).length === 1;
     const drawn = measuredValue(this.sk, d);
     if (only && drawn > 1e-12) {
       this.sk.lengthScale = v / drawn;
@@ -3291,7 +3636,7 @@ export class App {
 
   /** Saves the sketch to a file, asking where it should go and what it should be called. */
   private save(): void {
-    void this.saveAs(serialize(this.sk), ".json", "application/json", "Mech Sketch drawing", "sketch");
+    void this.saveAs(serialize(this.whole()), ".json", "application/json", "Mech Sketch drawing", "sketch");
   }
 
   private download(name: string, text: string, type: string): void {
@@ -3411,7 +3756,7 @@ export class App {
   private async exportFigure(how: "svg" | "tikz" | "copy-tikz"): Promise<void> {
     // Each workspace exports what it shows: the figure, or the plot.
     const plotting = this.tab === "plot";
-    const text = plotting ? this.plots.exported(how === "svg" ? "svg" : "tikz") : how === "svg" ? toSvg(this.sk) : toTikz(this.sk);
+    const text = plotting ? this.plots.exported(how === "svg" ? "svg" : "tikz") : how === "svg" ? toSvg(this.figureSketch()) : toTikz(this.figureSketch());
     if (!text) return this.toast(plotting ? "There is no plot to export yet." : "There is nothing to export yet.");
     const title = how === "svg" ? "Export SVG" : how === "tikz" ? "Export TikZ" : "Copy TikZ";
     if (!(await this.waitToExport(title, how === "copy-tikz" ? "Copy" : "Save"))) return;
@@ -3469,7 +3814,7 @@ export class App {
     const reserved = Math.min(this.titleblock.offsetHeight + 20, this.view.h / 3);
     const usable = this.view.h - reserved;
     // The print preview shows the page the figure is exported on, with its size written under it.
-    this.fig = this.preview ? fitFigure(this.sk) : null;
+    this.fig = this.preview ? fitFigure(this.figureSketch()) : null;
     if (this.fig) {
       const { page, mm } = this.fig;
       const bw = (page.x1 - page.x0) / mm, bh = (page.y1 - page.y0) / mm;
@@ -3483,6 +3828,12 @@ export class App {
     for (let pass = 0; pass < 2; pass++) {
       const mm = this.mm();
       const b = geometryBox(this.sk);
+      // The other sketches on show are in view too.
+      for (const p of this.otherParts()) {
+        if (p.info.hidden) continue;
+        const o = geometryBox(p.sk);
+        if (!boxIsEmpty(o)) { grow(b, [o.x0, o.y0]); grow(b, [o.x1, o.y1]); }
+      }
       // Axes and balloons placed away from the geometry belong in view too.
       for (const s of this.sk.symbols) {
         if (s.type === "frame") grow(b, symbolPosition(this.sk, s), boxIsEmpty(b) ? 0 : Math.max(s.xSize, s.ySize));
@@ -3552,7 +3903,7 @@ export class App {
       `<button type="button" class="icon-btn" id="view-btn" data-menu="view" aria-label="View settings" title="View settings" aria-haspopup="true" aria-expanded="false" aria-controls="view-list">${icon("sliders")}</button>` +
       `<div class="menu-list popover" id="view-list" role="group" aria-labelledby="view-btn" hidden>` +
       `<label class="pop-row" title="Double-click for 100%."><span>Dimension size while editing</span>` +
-      `<span class="pop-ctl"><input id="edit-scale" type="range" min="${EDIT_SCALE_MIN}" max="${EDIT_SCALE_MAX}" step="5" value="100"><output id="edit-scale-out" for="edit-scale">100%</output></span></label>` +
+      `<span class="pop-ctl"><input id="edit-scale" type="range" min="${EDIT_SCALE_MIN}" max="${EDIT_SCALE_MAX}" step="5" value="100">${numberBox('id="edit-scale-num"', "100 %", "Dimension size while editing")}</span></label>` +
       `<p class="pop-note">How large text, arrows and symbols look on screen while you draw. The size in print is set in the corner box.</p>` +
       `<label class="check pop-check pop-rule"><input id="tips-on" type="checkbox"><span>Show a tip the first time a tool is used</span></label>` +
       `<button type="button" class="linkish" data-act="tips-reset">Show the tips again from the start</button>` +
@@ -3572,7 +3923,7 @@ export class App {
   private showEditScale(): void {
     const percent = Math.round(this.editScale * 100);
     $<HTMLInputElement>("#edit-scale").value = String(percent);
-    $("#edit-scale-out").textContent = `${percent}%`;
+    showInBox($("#edit-scale").parentElement, `${percent} %`);
   }
 
   /** Sets how large annotations are on screen while editing, from the slider's percentage. */
@@ -3679,7 +4030,7 @@ export class App {
     this.titleblock.innerHTML =
       this.dofCell(count, state, cls) +
       `<label class="tb-cell tb-size" title="How large text, arrows and symbols are in the exported figure. Double-click for 100%."><span class="tb-k">Dimension size in print</span>` +
-      `<span class="tb-v"><input id="dim-scale" data-scale="dim" type="range" min="${DIM_SCALE_MIN}" max="${DIM_SCALE_MAX}" step="5" value="${percent}" aria-valuetext="${percent}%"><output id="dim-scale-out" for="dim-scale">${percent}%</output></span></label>` +
+      `<span class="tb-v"><input id="dim-scale" data-scale="dim" type="range" min="${DIM_SCALE_MIN}" max="${DIM_SCALE_MAX}" step="5" value="${percent}" aria-valuetext="${percent}%">${numberBox('data-scale="dim-num"', `${percent} %`, "Dimension size in print")}</span></label>` +
       `<label class="tb-cell" title="How wide the exported figure is: everything in it, with a 5 % margin all round."><span class="tb-k">Figure width</span><span class="tb-v"><input id="fig-width" data-scale="width" type="text" inputmode="decimal" value="${width}"> cm</span></label>`;
   }
 
@@ -3734,7 +4085,7 @@ export class App {
   /** The slider that sets how large every support is drawn. */
   private supportSizeField(): string {
     const pct = Math.round((this.sk.supportScale ?? 1) * 100);
-    return `<label class="field"><span>Size of the supports</span><span class="slider-row"><input data-field="support-scale" type="range" min="${SUPPORT_SCALE_MIN}" max="${SUPPORT_SCALE_MAX}" step="5" value="${pct}"><output>${pct} %</output></span>` +
+    return `<label class="field"><span>Size of the supports</span><span class="slider-row"><input data-field="support-scale" type="range" min="${SUPPORT_SCALE_MIN}" max="${SUPPORT_SCALE_MAX}" step="5" value="${pct}">${numberBox('data-num="support-scale"', `${pct} %`, "Size of the supports")}</span>` +
       `<small>For every support in the sketch, and for nothing else: the size sliders in the corner still scale them along with the rest. Double-click the slider to go back to 100 %.</small></label>`;
   }
 
@@ -3747,7 +4098,7 @@ export class App {
     const number = (label: string, field: string, value: string, note = "") =>
       `<label class="field"><span>${label}</span><input data-field="${field}" type="text" inputmode="decimal" value="${value}">${note ? `<small>${note}</small>` : ""}</label>`;
     const slider = (label: string, field: string, min: number, max: number, step: number, value: number, shown: string, note = "", off = false) =>
-      `<label class="field"><span>${label}</span><span class="slider-row"><input data-field="${field}" type="range" min="${min}" max="${max}" step="${step}" value="${value}"${off ? " disabled" : ""}><output>${esc(shown)}</output></span>${note ? `<small>${note}</small>` : ""}</label>`;
+      `<label class="field"><span>${label}</span><span class="slider-row"><input data-field="${field}" type="range" min="${min}" max="${max}" step="${step}" value="${value}"${off ? " disabled" : ""}>${numberBox(`data-num="${field}"`, shown, label, off)}</span>${note ? `<small>${note}</small>` : ""}</label>`;
     const rotate = `<button type="button" class="plain" data-act="rotate">Rotate 90° (R)</button>`;
     let html = "";
 
@@ -4077,6 +4428,17 @@ export class App {
       if (pts.length === 1 && entities === 1) {
         html += `<p class="muted">x ${this.inUnits(pts[0].x, 6)}, y ${this.inUnits(pts[0].y, 6)}</p>`;
       }
+      // Projected from another sketch: where it comes from, and the way to make it this sketch's own.
+      const projected = [...pts, ...lines, ...rounds].filter((e) => e.ref);
+      if (projected.length) {
+        const index = entityIndex(this.drawing, this.sk);
+        const lost = projected.some((e) => isOrphan(index, e));
+        const from = [...new Set(projected.map((e) => this.sourceName(e.ref!)).filter((n): n is string => !!n))];
+        html += `<p class="muted note-block ref-note">${lost
+          ? "Projected from a sketch, or from something in it, that has since been deleted: it stays where it was."
+          : `Projected from ${esc(from.join(" and "))}: it follows ${from.length > 1 ? "them" : "it"}, and cannot be moved here. It is left out of the figure.`}</p>` +
+          `<button type="button" class="plain" data-act="break-ref" title="It stays where it is, as geometry of this sketch that no longer follows its source">Make it this sketch's own</button>`;
+      }
       const cs: Curve[] = [...lines, ...rounds];
       if (cs.length) {
         // Arrows, springs and dampers are made with their own tools and keep what they are; the rest can be drawn one way or another.
@@ -4100,7 +4462,7 @@ export class App {
         // One slider for all of them; it shows the thickness of the first.
         const weight = cs[0].weight ?? standardWeight(cs[0]);
         const own = cs.some((c) => c.weight !== undefined);
-        html += `<label class="field"><span>Line thickness</span><span class="slider-row"><input data-field="weight" type="range" min="${WEIGHT_MIN}" max="${WEIGHT_MAX}" step="0.1" value="${weight}"><output>${this.weightLabel(weight)}</output></span>` +
+        html += `<label class="field"><span>Line thickness</span><span class="slider-row"><input data-field="weight" type="range" min="${WEIGHT_MIN}" max="${WEIGHT_MAX}" step="0.1" value="${weight}">${numberBox('data-num="weight"', this.weightLabel(weight), "Line thickness")}</span>` +
           `<small>In points, as LaTeX counts line widths${own ? "" : "; this is the standard thickness"}. It grows and shrinks with the dimension size in print. Double-click the slider to go back to the standard.</small></label>`;
         const only = cs.length === 1 ? cs[0] : undefined;
         const named = isNamed(only) ? only : null;
@@ -4254,9 +4616,19 @@ export class App {
     bar.addEventListener("mouseleave", unexplain);
     bar.addEventListener("focusout", unexplain);
 
+    const strip = $("#sheets");
+    strip.addEventListener("click", (e) => this.onStrip(e));
+    strip.addEventListener("dblclick", (e) => {
+      const tab = (e.target as HTMLElement).closest<HTMLElement>(".sheet.on .sheet-name");
+      const id = tab?.closest<HTMLElement>("[data-part]")?.dataset.part;
+      if (id) this.renameSketch(id);
+    });
+
     this.panel.addEventListener("change", (e) => {
       if (this.tab === "plot") return this.plots.change(e.target as HTMLInputElement | HTMLSelectElement);
-      this.onPanelChange(e.target as HTMLInputElement);
+      const input = e.target as HTMLInputElement;
+      if (input.dataset.num) return this.onSliderNumber(input.dataset.num, input.value);
+      this.onPanelChange(input);
     });
     this.panel.addEventListener("input", (e) => {
       const input = e.target as HTMLInputElement;
@@ -4282,6 +4654,14 @@ export class App {
     editScale.addEventListener("input", () => this.setEditScale(Number(editScale.value), false));
     editScale.addEventListener("change", () => this.setEditScale(Number(editScale.value), true));
     editScale.addEventListener("dblclick", () => this.setEditScale(100, true));
+    const editScaleBox = $<HTMLInputElement>("#edit-scale-num");
+    editScaleBox.addEventListener("change", () => {
+      const v = parseNumber(editScaleBox.value);
+      if (Number.isFinite(v) && v >= EDIT_SCALE_MIN && v <= EDIT_SCALE_MAX) this.setEditScale(v, true);
+      else this.toast(`The size while editing is between ${EDIT_SCALE_MIN} and ${EDIT_SCALE_MAX} %.`);
+      this.showEditScale();
+    });
+    editScaleBox.addEventListener("keydown", (e) => { e.stopPropagation(); if (e.key === "Enter") editScaleBox.blur(); });
 
     // The slider acts as it moves. What it changes only shows in print, so the preview comes on with it.
     this.titleblock.addEventListener("input", (e) => {
@@ -4299,6 +4679,12 @@ export class App {
     });
     this.titleblock.addEventListener("change", (e) => {
       const input = e.target as HTMLInputElement;
+      if (input.dataset.scale === "dim-num") {
+        const v = parseNumber(input.value);
+        if (Number.isFinite(v) && v >= DIM_SCALE_MIN && v <= DIM_SCALE_MAX) this.setDimScale(v);
+        else this.toast(`The dimension size is between ${DIM_SCALE_MIN} and ${DIM_SCALE_MAX} %.`);
+        this.chromeDirty = true;
+      }
       if (input.dataset.scale === "width") {
         const v = parseNumber(input.value);
         if (Number.isFinite(v) && v >= 1 && v <= 100) this.sk.figureWidthMm = v * 10;
@@ -4362,6 +4748,7 @@ export class App {
       case "redo": return this.redo();
       case "fit": return this.tab === "plot" ? this.plots.fit() : this.fit();
       case "new": return this.newSketch();
+      case "break-ref": return this.breakLinks([...this.selection]);
       case "open": return this.fileInput.click();
       case "save": return this.save();
       case "export-svg": return void this.exportFigure("svg");
@@ -4514,7 +4901,7 @@ export class App {
     if (!e?.element) return "";
     const look = lookOf(this.sk, e), length = elementLength(this.sk, e) || 1;
     const slider = (label: string, field: string, range: [number, number], value: number, what: "across" | "pitch", note: string) =>
-      `<label class="field"><span>${label}</span><span class="slider-row"><input data-field="${field}" type="range" min="0" max="100" step="1" value="${ratioPos(value / length, range)}"><output>${this.elementSizeLabel(e, what)}</output></span><small>${note}</small></label>`;
+      `<label class="field"><span>${label}</span><span class="slider-row"><input data-field="${field}" type="range" min="0" max="100" step="1" value="${ratioPos(value / length, range)}">${numberBox(`data-num="${field}"`, this.elementSizeLabel(e, what), label)}</span><small>${note}</small></label>`;
     let html = "";
     if (e.element === "spring") {
       html += `<div class="field"><span id="coil-label">Look</span><div class="segmented" role="group" aria-labelledby="coil-label">` +
@@ -4602,8 +4989,7 @@ export class App {
   private setDimScale(percent: number): void {
     if (!Number.isFinite(percent)) return;
     this.sk.dimScale = Math.max(DIM_SCALE_MIN, Math.min(DIM_SCALE_MAX, percent)) / 100;
-    const out = this.titleblock.querySelector("#dim-scale-out");
-    if (out) out.textContent = `${Math.round(this.sk.dimScale * 100)}%`;
+    showInBox(this.titleblock.querySelector("#dim-scale")?.parentElement, `${Math.round(this.sk.dimScale * 100)} %`);
     if (!this.preview) {
       this.setPreview(true);
       this.toast("Showing the print preview, where the dimension size applies. Press Q to go back to editing.");
@@ -4704,13 +5090,89 @@ export class App {
    * A field in the side panel changed. `live` is a slider on the move: the
    * change is shown at once, and recorded as one edit when the slider is let go.
    */
+  /**
+   * A number typed in the box beside a slider: the value itself, set exactly,
+   * where the slider only goes in steps. Lengths are in the units the sketch
+   * is dimensioned in.
+   */
+  private onSliderNumber(field: string, text: string): void {
+    const v = parseNumber(text);
+    const no = (message: string) => { this.toast(message); this.chromeDirty = true; return this.touch(); };
+    if (!Number.isFinite(v)) return no("Type a number, such as 3 or 2,5.");
+    const s = this.selectedSymbol();
+    const length = (what: string) => (v > 0 ? this.fromUnits(v) : (no(`${what} is a number above zero, in the drawing's units.`), null));
+    switch (field) {
+      case "support-scale":
+        if (v < SUPPORT_SCALE_MIN || v > SUPPORT_SCALE_MAX) return no(`The size of the supports is between ${SUPPORT_SCALE_MIN} and ${SUPPORT_SCALE_MAX} %.`);
+        if (Math.abs(v - 100) < 1e-9) delete this.sk.supportScale;
+        else this.sk.supportScale = v / 100;
+        break;
+      case "weight": {
+        if (v < WEIGHT_MIN || v > WEIGHT_MAX) return no(`A line is between ${WEIGHT_MIN} and ${WEIGHT_MAX} pt thick.`);
+        const { lines, rounds } = this.picked();
+        for (const c of [...lines, ...rounds]) c.weight = Number(v.toFixed(3));
+        break;
+      }
+      case "el-across":
+      case "el-pitch": {
+        const size = length("A size");
+        if (size === null) return;
+        this.editElements((look) => { if (field === "el-across") look.across = size; else look.pitch = size; }, false);
+        break;
+      }
+      case "sym-gaps":
+        if (s?.type !== "centermark") return;
+        if (s.gaps === undefined && v === 2) break;
+        s.gaps = Math.max(2, Math.min(CENTRE_GAPS_MAX, 2 * Math.round(v / 2)));
+        if (s.gaps === 2) delete s.gaps;
+        break;
+      case "sym-depth": {
+        if (s?.type !== "hatch") return;
+        const depth = length("The stroke size");
+        if (depth === null) return;
+        s.depth = depth;
+        break;
+      }
+      case "sym-freq": {
+        if (s?.type !== "hatch") return;
+        const n = Math.round(v), whole = curveLength(this.sk, s.on);
+        if (!(n >= 1 && n <= 1000) || !(whole > 0)) return no("The number of strokes is a whole number from 1 to 1000.");
+        s.spacing = whole / n;
+        break;
+      }
+      case "sym-height": {
+        if (s?.type !== "diagram") return;
+        const peak = diagramShape(this.sk, s)?.peak;
+        const h = length("The height");
+        if (h === null || !peak || Math.abs(peak.v) < 1e-12) return;
+        s.scale = h / Math.abs(peak.v);
+        break;
+      }
+      case "sym-count":
+        if (s?.type === "diagram") s.strokes = Math.max(1, Math.min(DIAGRAM_STROKES_MAX, Math.round(v) || 1));
+        else if (s?.type === "lineload") s.count = Math.max(2, Math.min(LINE_ARROWS_MAX, Math.round(v) || 2));
+        else return;
+        break;
+      case "sym-size": {
+        if (!s || !isLoad(s)) return;
+        const magnitude = s.type === "lineload" ? Math.max(s.q1, s.q2) : s.value;
+        const size = length("The size");
+        if (size === null || !(magnitude > 0)) return;
+        this.sk.loadScale = { ...this.sk.loadScale, [loadKind(s)]: size / magnitude };
+        break;
+      }
+      default:
+        return;
+    }
+    this.commit();
+  }
+
   private onPanelChange(input: HTMLInputElement, live = false): void {
     const field = input.dataset.field;
     if (!field) return;
     /** Shows a slider's new value beside it and redraws, without rebuilding the panel under the pointer. */
     const slide = (shown: string) => {
-      const out = input.parentElement?.querySelector("output");
-      if (out) out.textContent = shown;
+      showInBox(input.parentElement, shown);
       return live ? this.render() : this.commit();
     };
 

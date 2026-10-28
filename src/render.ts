@@ -74,6 +74,8 @@ export interface Scene {
   plain: boolean;
   /** In the print preview, the page the figure is exported on and the margin inside it, in annotation mm, and what to write under it. */
   page?: { page: Box; inner: Box; caption: string } | null;
+  /** The other sketches of the drawing, already drawn: thin lines under this one. */
+  under?: string;
 }
 
 export const GLYPH_SIZE = 18;
@@ -362,6 +364,7 @@ function drawHandles(s: Scene): string {
       continue;
     }
     if (isFixed(s.sk, e.id)) cls.push("fixed");
+    if (e.ref) cls.push("ref");
     if (!s.freeIds.has(e.id)) cls.push("defined");
     const dotPx = datums.get(e.id);
     if (dotPx !== undefined) {
@@ -475,5 +478,5 @@ export function renderScene(s: Scene): string {
     box = `<rect class="marquee" x="${n2(x)}" y="${n2(y)}" width="${n2(Math.abs(s.box.a[0] - s.box.b[0]))}" height="${n2(Math.abs(s.box.a[1] - s.box.b[1]))}"/>`;
   }
   if (s.plain) return background(s.view, false, true) + drawPage(s) + drawPrims(s) + drawGrips(s) + drawPreview(s) + drawSnap(s) + box;
-  return background(s.view, s.sk.showOrigin, false) + drawPrims(s) + drawOverlaps(s) + drawHandles(s) + drawGlyphs(s) + drawGrips(s) + drawPreview(s) + drawSnap(s) + box;
+  return background(s.view, s.sk.showOrigin, false) + (s.under ?? "") + drawPrims(s) + drawOverlaps(s) + drawHandles(s) + drawGlyphs(s) + drawGrips(s) + drawPreview(s) + drawSnap(s) + box;
 }

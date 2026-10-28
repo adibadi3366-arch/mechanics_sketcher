@@ -18,6 +18,7 @@ import {
 import { evaluate, degree } from "./expr";
 import { icon } from "./icons";
 import { showTexFields, texInline } from "./texfield";
+import { numberBox, showInBox } from "./slidernum";
 
 /** What the workspace needs from the app around it. */
 export interface PlotHost {
@@ -1027,7 +1028,7 @@ export class PlotWorkspace {
       `<button type="button" class="swatch" data-pact="color" data-v="${col}" aria-pressed="${c.color === col}" aria-label="Colour ${col}" title="${col}" style="background:${col}"></button>`).join("")}` +
       `<label class="swatch custom" title="Another colour"><input data-pf="color" type="color" value="${esc(c.color)}" aria-label="Another colour"></label></div></div>`;
     const weight = c.weight ?? PLOT.weight;
-    html += `<label class="field"><span>Line thickness</span><span class="slider-row"><input data-pf="weight" type="range" min="${WEIGHT_MIN}" max="${WEIGHT_MAX}" step="0.1" value="${weight}"><output>${shown(weight)} pt</output></span></label>`;
+    html += `<label class="field"><span>Line thickness</span><span class="slider-row"><input data-pf="weight" type="range" min="${WEIGHT_MIN}" max="${WEIGHT_MAX}" step="0.1" value="${weight}">${numberBox('data-pf="weight-num"', `${shown(weight)} pt`, "Line thickness")}</span></label>`;
     html += `<div class="field"><span id="pl-dash">Line</span><div class="segmented" role="group" aria-labelledby="pl-dash">${([["solid", "Solid"], ["dashed", "Dashed"], ["dotted", "Dotted"]] as const).map(([v, name]) =>
       `<button type="button" data-pact="dash" data-v="${v}" aria-pressed="${(c.dash ?? "solid") === v}">${name}</button>`).join("")}</div></div>`;
     html += `<label class="check"><input data-pf="fill" type="checkbox"${c.fill ? " checked" : ""}><span>${c.param ? "Shade the inside" : "Shade down to the axis"}</span></label>`;
@@ -1289,8 +1290,14 @@ export class PlotWorkspace {
       if (!Number.isFinite(w)) return;
       if (Math.abs(w - PLOT.weight) < 1e-9) delete c.weight;
       else c.weight = Number(w.toFixed(2));
-      const out = input.parentElement?.querySelector("output");
-      if (out) out.textContent = `${shown(w)} pt`;
+      showInBox(input.parentElement, `${shown(w)} pt`);
+      return done();
+    }
+    if (pf === "weight-num") {
+      const w = Number(input.value.trim().replace(",", "."));
+      if (!(w >= WEIGHT_MIN && w <= WEIGHT_MAX)) return;
+      if (Math.abs(w - PLOT.weight) < 1e-9) delete c.weight;
+      else c.weight = Number(w.toFixed(3));
       return done();
     }
     if (pf === "fill" && input instanceof HTMLInputElement) {

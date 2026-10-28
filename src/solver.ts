@@ -1,6 +1,6 @@
 // Bridge between the sketch model and FreeCAD's planegcs solver.
 
-import { GcsWrapper, SolveStatus, DebugMode, type SketchPrimitive } from "@salusoft89/planegcs";
+import { GcsWrapper, SolveStatus, DebugMode, Algorithm, type SketchPrimitive } from "@salusoft89/planegcs";
 import {
   type Sketch, type Id, type Constraint, type Entity, type Link, type HalfPair,
   ORIGIN, entity, point, isFixed, arcRadius, unitScale,
@@ -43,7 +43,8 @@ function geometryPrims(sk: Sketch): Prim[] {
   // planegcs needs every point pushed before the curves that use it.
   for (const e of sk.entities) {
     if (e.type === "point") {
-      out.push({ id: e.id, type: "point", x: e.x, y: e.y, fixed: fixed.has(e.id) });
+      // Projected from another sketch, a point is where its source is.
+      out.push({ id: e.id, type: "point", x: e.x, y: e.y, fixed: fixed.has(e.id) || !!e.ref });
     }
   }
   for (const e of sk.entities) {
@@ -276,6 +277,13 @@ function constraintPrims(sk: Sketch, c: Constraint, params: FreeParam[]): Prim[]
   }
 }
 
+/** Projected circles keep the size of their source: nothing in this sketch can change it. */
+function projectionLocks(sk: Sketch): Prim[] {
+  const out: Prim[] = [];
+  for (const e of sk.entities) if (e.type === "circle" && e.ref) out.push({ id: `${e.id}:ref`, type: "circle_radius", c_id: e.id, radius: e.r });
+  return out;
+}
+
 function dragPrims(sk: Sketch, drags: Drag[]): Prim[] {
   const out: Prim[] = [];
   drags.forEach((d, i) => {
@@ -313,7 +321,7 @@ export class SketchSolver {
    * Solves the sketch. On success the solved positions are written back into
    * `sk`; on failure `sk` is left untouched.
    */
-  solve(sk: Sketch, drags: Drag[] = []): SolveResult {
+  solve(sk: Sketch, drags: Drag[] = [], algorithm: Algorithm = Algorithm.DogLeg): SolveResult {
     const g = this.gcs;
     g.clear_data();
 
@@ -321,7 +329,7 @@ export class SketchSolver {
     const helpers: Prim[] = [];
     const rest: Prim[] = [];
     for (const p of dragPrims(sk, drags)) (p.type === "point" ? helpers : rest).push(p);
-    const constraints: Prim[] = [];
+    const constraints: Prim[] = projectionLocks(sk);
     const params: FreeParam[] = [];
     for (const c of sk.constraints) constraints.push(...constraintPrims(sk, c, params));
     for (const p of params) g.push_sketch_param(p.name, p.value, false);
@@ -334,7 +342,7 @@ export class SketchSolver {
       ...constraints, ...rest,
     ]);
 
-    const status = g.solve();
+    const status = g.solve(algorithm);
     const ok = status === SolveStatus.Success || status === SolveStatus.Converged;
     const unique = (ids: string[]) =>
       [...new Set(ids.map(modelId))].filter((id) => sk.constraints.some((c) => c.id === id));
@@ -368,7 +376,7 @@ export class SketchSolver {
     const g = this.gcs;
     g.clear_data();
     const geometry = geometryPrims(sk).map((p) => (p.type === "point" && p.id === pin ? { ...p, fixed: true } : p));
-    const constraints: Prim[] = [];
+    const constraints: Prim[] = projectionLocks(sk);
     const params: FreeParam[] = [];
     for (const c of sk.constraints) constraints.push(...constraintPrims(sk, c, params));
     for (const p of params) g.push_sketch_param(p.name, p.value, false);
@@ -380,11 +388,61 @@ export class SketchSolver {
 
   /**
    * Which points can still move, and which circles can still change size.
-   * A point is free if pinning it where it is uses up a degree of freedom.
-   * Returns null when the sketch does not solve, or is too large to probe
-   * point by point. Does not change the sketch.
+   * Every point is pulled a tiny way in a direction of its own, and every
+   * circle pulled larger or smaller, all at once: the solver moves what it is
+   * free to move as near to where it was pulled as the constraints allow, and
+   * leaves the rest where they are. What moved is free. One solve answers for
+   * the whole sketch, where pinning each point in turn took one per point.
+   * Two rounds, with other pulls, keep a point that a first pull happened to
+   * leave almost still from being taken as fixed. Returns null when the
+   * sketch does not solve. Does not change the sketch.
    */
   freedom(original: Sketch): Freedom | null {
+    const sk = structuredClone(original);
+    const first = this.solve(sk);
+    if (!first.ok) return null;
+    const out: Freedom = { points: new Set(), radii: new Set() };
+    if (first.dof <= 0) return out;
+    const pts = sk.entities.filter((e): e is Extract<Entity, { type: "point" }> => e.type === "point" && !isFixed(sk, e.id));
+    const circles = sk.entities.filter((e): e is Extract<Entity, { type: "circle" }> => e.type === "circle");
+    if (!pts.length && !circles.length) return out;
+    // How far to pull, and how far counts as having moved, from the size of the sketch.
+    let x0 = Infinity, x1 = -Infinity, y0 = Infinity, y1 = -Infinity;
+    for (const e of sk.entities) if (e.type === "point") { x0 = Math.min(x0, e.x); x1 = Math.max(x1, e.x); y0 = Math.min(y0, e.y); y1 = Math.max(y1, e.y); }
+    const size = Math.max(x1 - x0, y1 - y0, ...circles.map((c) => c.r), 1e-6);
+    const pull = size * 1e-3, moved = pull * 1e-4;
+    let seed = 0x2545f491;
+    const random = () => { seed ^= seed << 13; seed ^= seed >>> 17; seed ^= seed << 5; return ((seed >>> 0) / 4294967296) * 2 - 1; };
+    for (let round = 0; round < 2; round++) {
+      const trial = structuredClone(sk);
+      const drags: Drag[] = [];
+      for (const p of pts) drags.push({ kind: "point", id: p.id, x: p.x + random() * pull, y: p.y + random() * pull });
+      for (const c of circles) {
+        // A point on the rim, pulled out or in: a circle free to change size does.
+        const centre = point(sk, c.c), a = random() * Math.PI, r = c.r + random() * pull;
+        drags.push({ kind: "rim", id: c.id, x: centre.x + r * Math.cos(a), y: centre.y + r * Math.sin(a) });
+      }
+      // Pulled in many directions at once, the solver settles best with BFGS; the other two give up.
+      if (!this.solve(trial, drags, Algorithm.BFGS).ok) return round ? out : this.freedomByPinning(original);
+      for (const p of pts) {
+        const q = point(trial, p.id);
+        if (Math.hypot(q.x - p.x, q.y - p.y) > moved) out.points.add(p.id);
+      }
+      for (const c of circles) {
+        const t = entity(trial, c.id);
+        if (t?.type === "circle" && Math.abs(t.r - c.r) > moved) out.radii.add(c.id);
+      }
+    }
+    return out;
+  }
+
+  /**
+   * The same, worked out by pinning each point in turn: one solve per point.
+   * Exact, but slow on a large sketch; kept for when the pull does not solve,
+   * and to check the pull against. Null when the sketch does not solve or is
+   * too large to probe point by point.
+   */
+  freedomByPinning(original: Sketch): Freedom | null {
     if (original.entities.length > 400) return null;
     // Probe a solved copy: pinning a point only makes sense where the constraints already hold.
     const sk = structuredClone(original);

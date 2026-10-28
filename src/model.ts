@@ -12,6 +12,8 @@ export interface Point {
   y: number;
   /** Placed with the Point tool, so it survives when nothing else uses it. */
   standalone?: boolean;
+  /** Projected from an earlier sketch: it follows the entity with this id there, and cannot move on its own. */
+  ref?: Id;
 }
 export interface Line {
   id: Id;
@@ -42,6 +44,8 @@ export interface Line {
   /** Where the name sits, in annotation mm from the middle of the arrow or element. Unset: beside it. */
   lx?: number;
   ly?: number;
+  /** Projected from an earlier sketch: it follows the entity with this id there, and cannot move on its own. */
+  ref?: Id;
 }
 export type ArrowEnds = "end" | "start" | "both";
 export type LineElement = "spring" | "damper" | "spiral";
@@ -76,6 +80,8 @@ export interface Circle {
   dashed?: boolean;
   /** CSS hex colour it is drawn in. Unset: black. */
   color?: string;
+  /** Projected from an earlier sketch: it follows the entity with this id there, and cannot move on its own. */
+  ref?: Id;
 }
 /** Counter-clockwise from p1 to p2 around c. */
 export interface Arc {
@@ -104,6 +110,8 @@ export interface Arc {
   /** Where the name sits, in annotation mm from the middle of the arc. Unset: outside it. */
   lx?: number;
   ly?: number;
+  /** Projected from an earlier sketch: it follows the entity with this id there, and cannot move on its own. */
+  ref?: Id;
 }
 export type Entity = Point | Line | Circle | Arc;
 export type Curve = Line | Circle | Arc;
@@ -554,6 +562,25 @@ export interface Sketch {
    * Unset while there is no length dimension.
    */
   lengthScale?: number;
+  /**
+   * The sketches the drawing is made of, in order: a sketch can take
+   * geometry from those before it. Every entity, constraint and symbol says
+   * which one it is in with a `sketch` of that id; without one, it is in the
+   * first. Unset: the drawing is one sketch.
+   */
+  sketches?: SketchInfo[];
+  /** The sketch being worked on. */
+  active?: Id;
+}
+
+/** One sketch of a drawing, as listed in the strip at the bottom. */
+export interface SketchInfo {
+  id: Id;
+  name: string;
+  /** Left off the screen while another sketch is worked on. */
+  hidden?: true;
+  /** Left out of the exported figure. */
+  out?: true;
 }
 
 // ---- plots ------------------------------------------------------------------
@@ -672,7 +699,7 @@ export function isLink(c: Constraint): c is Link {
   return c.type === "mirror" || c.type === "shift" || c.type === "turn";
 }
 
-const PREFIX: Record<string, string> = { point: "p", line: "l", circle: "c", arc: "a", symbol: "s", plot: "g", curve: "f", mark: "n" };
+const PREFIX: Record<string, string> = { point: "p", line: "l", circle: "c", arc: "a", symbol: "s", plot: "g", curve: "f", mark: "n", sketch: "d" };
 
 export function newId(sk: Sketch, kind: string): Id {
   return `${PREFIX[kind] ?? "k"}${sk.nextId++}`;
@@ -778,7 +805,10 @@ function pruneLink(c: Link, alive: Set<Id>): Link | null {
 }
 
 export function isFixed(sk: Sketch, pointId: Id): boolean {
-  return pointId === ORIGIN || sk.constraints.some((c) => c.type === "fixed" && c.p === pointId);
+  if (pointId === ORIGIN || sk.constraints.some((c) => c.type === "fixed" && c.p === pointId)) return true;
+  // Projected from another sketch, it is where its source is.
+  const e = sk.entities.find((x) => x.id === pointId);
+  return e?.type === "point" && !!e.ref;
 }
 
 /** True when a line, circle or arc is built on the point. */
@@ -1052,6 +1082,8 @@ export function deserialize(text: string): Sketch {
     ...(typeof raw.supportScale === "number" && raw.supportScale > 0 ? { supportScale: raw.supportScale } : {}),
     ...(plots.length ? { plots } : {}),
     ...(lengthScale !== undefined ? { lengthScale } : {}),
+    ...(Array.isArray(raw.sketches) && raw.sketches.length && raw.sketches.every((i) => !!i && typeof i.id === "string" && typeof i.name === "string")
+      ? { sketches: raw.sketches, ...(typeof raw.active === "string" ? { active: raw.active } : {}) } : {}),
   };
 }
 
