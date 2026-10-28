@@ -92,6 +92,10 @@ Conflicting constraints are flagged as they happen. The solver is FreeCAD's plan
   - Numbers count up automatically.
   - The frame can be a circle, a box, an underline or nothing.
   - The leader can end in an arrow, a dot or nothing.
+  - Drag the handle at the tip of the leader to point it at something else.
+- **Measure:** placed like a dimension and follows the geometry, with the value in brackets. It changes nothing and only you see it: it's left out of the print and the exports. Drag it like a dimension.
+- **Etalon:** a scale bar named with its unit, such as 1 m, or 10 kN for forces drawn at a scale. Drag its far end to set the length.
+- **Right angle:** the small square in the corner of two lines, with an optional dot. It's only drawn and holds nothing.
 - **Fill:** click inside a closed shape to colour it.
 - **Hatching:** strokes along a line, arc or circle, such as the ground under a support.
 
@@ -144,7 +148,7 @@ A workspace of its own for plotting functions, exported separately as SVG or pgf
 
 - **Drawn as:** solid, dashed or centre line, with **Construction line** as a separate switch.
 - **Line thickness:** per curve, in points as LaTeX counts them.
-- **Colours** for loads, fills, datum points and plot curves.
+- **Colours** for lines, circles, arcs, arrows, springs, loads, fills, datum points and plot curves. They're kept in SVG and TikZ.
 - **Dimension size in print:** scales all text and symbols in the export together.
 - **Figure width:** the width of the exported figure, in cm.
 - **Print preview (Q):** hides everything that isn't exported and shows text at its size in print.
@@ -186,6 +190,7 @@ The live app shows the Support button for 3 seconds before an export finishes; t
 | Middle-drag, wheel | Pan, zoom |
 | 0 | Zoom to fit |
 | Esc, right-click | Cancel one step |
+| Right-click on stacked items | Select the next one under the pointer |
 | Delete | Delete the selection |
 | Ctrl+A | Select everything |
 | Ctrl+Z / Ctrl+Y | Undo / redo |

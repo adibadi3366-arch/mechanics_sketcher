@@ -18,24 +18,23 @@ const LIVE: News = {
   body:
     `<p class="lead">Here is what is new since you last used it.</p>` +
     `<ul class="news">` +
-    `<li><b>Dynamics tab.</b> Springs, drawn as a zigzag or a coil, dampers, a torsion spring and damper, and the centre of mass mark. They stretch and turn with what they are tied to.</li>` +
-    `<li><b>Plot tab.</b> Functions, functions in pieces and curves given by x(t) and y(t), with the graph and the print side by side. A plot exports as SVG, or for pgfplots with its formulas kept as formulas.</li>` +
-    `<li><b>Diagram</b>, on the Annotate tab, lays a plot along a beam, the way an internal force diagram is drawn. Change the function and the diagram follows.</li>` +
-    `<li><b>Construction lines.</b> With the switch at the start of the Sketch ribbon (G) on, what you draw is left out of the print.</li>` +
-    `<li><b>Dimension</b> has moved to the Sketch tab, first among the constraints.</li>` +
-    `<li><b>TeX shows typeset</b> in the side panel: <code>\\pi</code> as π, <code>F_1</code> with its subscript.</li>` +
-    `<li><b>A shorter wait</b> before an export: 3 seconds instead of 10.</li>` +
+    `<li><b>Measure</b>, on the Annotate tab. Click what to measure and where to put it, as for a dimension. It shows the value in brackets and follows the geometry, but changes nothing, and only you see it: it is left out of the print and the exports.</li>` +
+    `<li><b>Etalon</b>, on the Annotate tab: a scale bar named with its unit, such as 1 m, or 10 kN for forces drawn at a scale. Drag its far end to set its length.</li>` +
+    `<li><b>Right angle</b>, on the Annotate tab: the small square in the corner two lines make, with a dot inside if you like.</li>` +
+    `<li><b>Colours</b> for lines, circles, arcs, arrows and springs, in the side panel. They are kept in SVG and TikZ.</li>` +
+    `<li><b>Balloons</b> can be pointed at something else: select one and drag the handle at the tip of its leader.</li>` +
+    `<li><b>Right-click</b> where things lie on top of each other to pick the next one under the pointer.</li>` +
     `</ul>`,
   close: "Got it",
 };
 
 /** In the beta: what was tried out here is in the released app now. */
 const BETA: News = {
-  title: "The beta's features are live",
+  title: "These features are live",
   body:
-    `<p class="lead">Everything you have been trying out here is now in the released Mech Sketch at mech-sketch.org: the Dynamics and Plot tabs, diagrams, construction lines and the rest. Thank you for testing them.</p>` +
+    `<p class="lead">Measure, the etalon, the right-angle mark, coloured lines, the handle on a balloon's leader and right-clicking through stacked items are now in the released Mech Sketch at mech-sketch.org. Thank you for trying them out.</p>` +
     `<p>Your sketch here stays in the beta, apart from the released app's. To carry it over, <b>Save</b> it here and <b>Open</b> the file there.</p>` +
-    `<p class="muted">The beta goes on: the next new features will show up here first. If you would rather stay with the released app, you can uninstall the beta's app and use mech-sketch.org.</p>`,
+    `<p class="muted">The next new features will show up here first.</p>`,
   link: { href: "../", text: "Open the released app" },
   close: "Stay in the beta",
 };

@@ -25,7 +25,7 @@ export const EXPORT_WAIT_SECONDS = BETA ? 0 : 3;
  * before is told once what this release brings; changing it shows the notice
  * again, for the next release.
  */
-export const NEWS_ID = "2026-10";
+export const NEWS_ID = "2026-10-28";
 
 /**
  * Where bug reports and suggestions are sent. The report form writes an
