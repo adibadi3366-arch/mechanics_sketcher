@@ -161,3 +161,67 @@ export function chainCubics(pts: V[]): Cubic[] {
   for (let i = 0; i + 3 < pts.length; i += 3) out.push([pts[i], pts[i + 1], pts[i + 2], pts[i + 3]]);
   return out;
 }
+
+/** A cubic Bézier piece cut in two at t: the part before and the part after. */
+export function cubicSplit([a, b, c, d]: Cubic, t: number): [Cubic, Cubic] {
+  const lerp = (p: V, q: V): V => [p[0] + (q[0] - p[0]) * t, p[1] + (q[1] - p[1]) * t];
+  const ab = lerp(a, b), bc = lerp(b, c), cd = lerp(c, d);
+  const abc = lerp(ab, bc), bcd = lerp(bc, cd);
+  const m = lerp(abc, bcd);
+  return [[a, ab, abc, m], [m, bcd, cd, d]];
+}
+
+/** Where on a piece the curve is `s` along from its start, measured along it: the parameter, or null past its end. */
+function paramAt(q: Cubic, s: number): number | null {
+  const N = 64;
+  let run = 0, prev = q[0];
+  for (let i = 1; i <= N; i++) {
+    const p = bezierAt(q, i / N);
+    const step = dist(prev, p);
+    if (run + step >= s) return (i - 1 + (step > 0 ? (s - run) / step : 0)) / N;
+    run += step;
+    prev = p;
+  }
+  return null;
+}
+
+/** How long a run of pieces is, measured along it. */
+export function chainLength(chain: Cubic[]): number {
+  let total = 0;
+  for (const q of chain) {
+    const pts = bezierPoints(q, 64);
+    for (let i = 1; i < pts.length; i++) total += dist(pts[i - 1], pts[i]);
+  }
+  return total;
+}
+
+const reversed = (chain: Cubic[]): Cubic[] => chain.slice().reverse().map(([a, b, c, d]) => [d, c, b, a] as Cubic);
+
+/** The run of pieces with `start` cut off its beginning and `end` off its end, measured along it. */
+export function chainTrim(chain: Cubic[], start: number, end: number): Cubic[] {
+  const cutFront = (ch: Cubic[], s: number): Cubic[] => {
+    let left = s;
+    for (let i = 0; i < ch.length; i++) {
+      const t = paramAt(ch[i], left);
+      if (t !== null) return [cubicSplit(ch[i], t)[1], ...ch.slice(i + 1)];
+      left -= chainLength([ch[i]]);
+    }
+    return ch;
+  };
+  let out = start > 0 ? cutFront(chain, start) : chain;
+  if (end > 0) out = reversed(cutFront(reversed(out), end));
+  return out;
+}
+
+/** The point `s` along the run from its start, or from its end with `fromEnd`. */
+export function chainPointAlong(chain: Cubic[], s: number, fromEnd = false): V {
+  const ch = fromEnd ? reversed(chain) : chain;
+  let left = s;
+  for (const q of ch) {
+    const t = paramAt(q, left);
+    if (t !== null) return bezierAt(q, t);
+    left -= chainLength([q]);
+  }
+  const last = ch[ch.length - 1];
+  return last ? last[3] : [0, 0];
+}

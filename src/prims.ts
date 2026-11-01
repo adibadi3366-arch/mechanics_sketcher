@@ -7,12 +7,14 @@ import {
   type Arc, type Line, type Curve, type Sym, type Support, type Frame, type CenterMark, type Balloon,
   type Fill as FillSym, type Hatch, type Datum, type Note, type Load, type LineLoad, type Moment, type AnyLoad, type LoadKind, type Diagram, type Trace,
   type Etalon, type RightAngle, type Bezier, type FreeCurve, HATCH_GAP, PICTURE_OPACITY,
-  entity, point, arcRadius, arcAngles, isDimension, isNamed, isLengthDimension, unitScale, geometryBox, geometryExtent,
+  entity, point, arcRadius, arcAngles, isDimension, isNamed, isLengthDimension, unitScale, geometryBox, geometryExtent, measuredValue,
 } from "./model";
+export { measuredValue };
 import { elementPaths, elementReach } from "./element";
 import {
   type V, type Box, add, sub, mul, dot, norm, perp, mid, polar, dist, len, angleOf, wrap, inSweep,
   distToSegment, intersectLines, TWO_PI, type Cubic, bezierAt, bezierTangent, bezierPoints, splineCubics, chainNearest, chainPoints, chainCubics,
+  chainLength, chainTrim, chainPointAlong,
 } from "./geom";
 import { texEngine } from "./tex";
 import { baseline, diagramShape, traceShape } from "./diagram";
@@ -137,6 +139,8 @@ export interface BezierPrim extends Base {
   /** One or more cubic pieces end to end: the start, then two controls and an end for each piece. */
   pts: V[];
   stroke: StrokeStyle; width?: number; dash?: number[];
+  /** Arrowheads at the start and at the end, scaled by `head` as on a line. */
+  arrowA?: boolean; arrowB?: boolean; head?: number;
 }
 /** Counter-clockwise from a0 to a1, with a1 > a0. */
 export interface ArcPrim extends Base { k: "arc"; c: V; r: number; a0: number; a1: number; stroke: StrokeStyle; width?: number; dash?: number[]; arrowA?: boolean; arrowB?: boolean; head?: number }
@@ -506,37 +510,6 @@ export function settleLengthScale(sk: Sketch): void {
   sk.lengthScale = m > 1e-12 && d.value > 0 ? d.value / m : 1;
 }
 
-/**
- * What a dimension measures in the sketch as it is now, in the drawing's own
- * units: a distance, an angle in radians counter-clockwise from its first
- * line to its second, or a radius.
- */
-export function measuredValue(sk: Sketch, d: Dimension): number {
-  if (d.type === "distance") {
-    if (d.toLine) {
-      const f = footOnLine(sk, d, 1), a = point(sk, d.a);
-      return Math.hypot(a.x - f[0], a.y - f[1]);
-    }
-    const a = point(sk, d.a), b = point(sk, d.b);
-    if (d.mode === "horizontal") return Math.abs(b.x - a.x);
-    if (d.mode === "vertical") return Math.abs(b.y - a.y);
-    return Math.hypot(b.x - a.x, b.y - a.y);
-  }
-  if (d.type === "radius") {
-    const e = entity(sk, d.target);
-    return e?.type === "circle" ? e.r : e?.type === "arc" ? arcRadius(sk, e) : 0;
-  }
-  const l1 = entity(sk, d.l1), l2 = entity(sk, d.l2);
-  if (l1?.type !== "line" || l2?.type !== "line") return 0;
-  const dir = (l: Line, rev: boolean): V => {
-    const a = point(sk, rev ? l.p2 : l.p1), b = point(sk, rev ? l.p1 : l.p2);
-    return [b.x - a.x, b.y - a.y];
-  };
-  const d1 = dir(l1, d.rev1), d2 = dir(l2, d.rev2);
-  const v = Math.atan2(d1[0] * d2[1] - d1[1] * d2[0], dot(d1, d2));
-  return v < 0 ? v + TWO_PI : v;
-}
-
 // ---- symbols ----------------------------------------------------------------
 
 /** Start, end and direction data of a curve, in model units. */
@@ -860,16 +833,25 @@ function datumPrims(sk: Sketch, s: Datum, mm: number): Prim[] {
 }
 
 function notePrims(s: Note, mm: number): Prim[] {
-  return noteShape(s.id, [s.x * mm, s.y * mm], s.text);
+  return noteShape(s.id, [s.x * mm, s.y * mm], s.text, s.angle);
 }
 
-/** A note whose text starts at `at`, the middle of its left edge, in paper mm. */
-export function noteShape(ref: Id, at: V, typed: string): Prim[] {
+/** A note whose text starts at `at`, the middle of its left edge, in paper mm, turned `angle` radians about there. */
+export function noteShape(ref: Id, at: V, typed: string, angle = 0): Prim[] {
   if (!typed.trim()) return [];
   const { latex, lines } = noteLatex(typed);
   const text: TextPrim = { ref, layer: "sym", k: "text", at, tex: noteTex(typed), anchor: "w", latex };
   if (lines > 1) text.lines = lines;
+  if (Math.abs(angle) > 1e-9) text.rot = angle;
   return [text];
+}
+
+/** The handle that turns a note: a little past the end of its text, along it. Paper mm. */
+export function noteGrip(s: Note, mm: number): V | null {
+  const [text] = noteShape(s.id, [s.x * mm, s.y * mm], s.text, s.angle);
+  if (text?.k !== "text") return null;
+  const b = textBox(text);
+  return polar(text.at, b.x1 - text.at[0] + 2.5, s.angle ?? 0);
 }
 
 // ---- etalon and right angle ---------------------------------------------------
@@ -1455,7 +1437,13 @@ export function buildPrims(sk: Sketch, mm: number, opts: BuildOptions): Prim[] {
     } else if (e.type === "circle") {
       out.push({ ...base, k: "circle", c: P(sk, e.c, mm), r: e.r * mm });
     } else if (e.type === "bezier" || e.type === "spline") {
-      out.push({ ...base, k: "bezier", pts: chainPoints(cubicsOf(sk, e)).map((q) => mul(q, mm)) });
+      const curve: BezierPrim = { ...base, k: "bezier", pts: chainPoints(cubicsOf(sk, e)).map((q) => mul(q, mm)) };
+      if (arrow && !(e.type === "spline" && e.closed)) {
+        curve.head = head;
+        if (arrow !== "end") curve.arrowA = true;
+        if (arrow !== "start") curve.arrowB = true;
+      }
+      out.push(curve);
     } else {
       const { a0, a1 } = arcAngles(sk, e);
       const arc: ArcPrim = { ...base, k: "arc", c: P(sk, e.c, mm), r: arcRadius(sk, e) * mm, a0, a1 };
@@ -1514,9 +1502,31 @@ export function strokedSweep(p: ArcPrim): [number, number] {
   return [p.arrowA ? p.a0 + back : p.a0, p.arrowB ? p.a1 - back : p.a1];
 }
 
-/** Arrowhead outlines for a line or arc primitive. */
-export function arrowHeads(p: LinePrim | ArcPrim): V[][] {
+/** The pieces of a curve primitive as they are stroked: an end under an arrowhead stops inside the head, as on a line. */
+export function strokedChain(p: BezierPrim): V[] {
+  if (!p.arrowA && !p.arrowB) return p.pts;
+  const chain = chainCubics(p.pts);
+  const back = PAPER.arrowLen * (p.head ?? 1) * 0.6;
+  const heads = (p.arrowA ? 1 : 0) + (p.arrowB ? 1 : 0);
+  if (chainLength(chain) <= back * heads * 1.5) return p.pts;
+  return chainPoints(chainTrim(chain, p.arrowA ? back : 0, p.arrowB ? back : 0));
+}
+
+/** Arrowhead outlines for a line, arc or curve primitive. */
+export function arrowHeads(p: LinePrim | ArcPrim | BezierPrim): V[][] {
   const heads: V[][] = [];
+  if (p.k === "bezier") {
+    // Each head points along the chord over its own length, so it follows the curve as on an arc.
+    const chain = chainCubics(p.pts);
+    if (!chain.length || chainLength(chain) < 1e-9) return heads;
+    const L = PAPER.arrowLen * (p.head ?? 1);
+    if (p.arrowA) heads.push(arrowHead(p.pts[0], sub(p.pts[0], chainPointAlong(chain, L)), p.head));
+    if (p.arrowB) {
+      const tip = p.pts[p.pts.length - 1];
+      heads.push(arrowHead(tip, sub(tip, chainPointAlong(chain, L, true)), p.head));
+    }
+    return heads;
+  }
   if (p.k === "line") {
     if (len(sub(p.b, p.a)) < 1e-9) return heads;
     if (p.arrowA) heads.push(arrowHead(p.a, sub(p.a, p.b), p.head));

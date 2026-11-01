@@ -142,8 +142,9 @@ export interface Bezier {
   color?: string;
   /** Projected from an earlier sketch: it follows the entity with this id there, and cannot move on its own. */
   ref?: Id;
-  /** Never an arrow or a machine element, and never named: these are here so curves can be asked alike. */
-  arrow?: undefined;
+  /** Arrowheads at its ends: p1 is the start, p2 the end. Unset: none. */
+  arrow?: ArrowEnds;
+  /** Never a machine element, and never named: these are here so curves can be asked alike. */
   element?: undefined;
   look?: undefined;
   label?: undefined;
@@ -172,8 +173,9 @@ export interface Spline {
   color?: string;
   /** Projected from an earlier sketch: it follows the entity with this id there, and cannot move on its own. */
   ref?: Id;
-  /** Never an arrow or a machine element, and never named: these are here so curves can be asked alike. */
-  arrow?: undefined;
+  /** Arrowheads at its ends: its first point is the start, its last the end. Unset: none. Never on a closed one. */
+  arrow?: ArrowEnds;
+  /** Never a machine element, and never named: these are here so curves can be asked alike. */
   element?: undefined;
   look?: undefined;
   label?: undefined;
@@ -198,6 +200,12 @@ export interface Equal { id: Id; type: "equal"; a: Id; b: Id }
 /** A line touching a circle or arc; or, with a circle or arc in the place of the line, two of those touching each other. */
 export interface Tangent { id: Id; type: "tangent"; l: Id; c: Id }
 export interface Fixed { id: Id; type: "fixed"; p: Id }
+/**
+ * Two dimensions or measures that hold the same value: lengths with lengths,
+ * angles with angles. Unlike the others it names two constraints, not
+ * geometry. A measure in it holds its geometry too.
+ */
+export interface SameValue { id: Id; type: "sameValue"; a: Id; b: Id }
 
 /**
  * A point of the original and its image under a mirror, a shift or a turn.
@@ -291,7 +299,7 @@ export interface RadiusDim extends DimBase {
 export type Dimension = DistanceDim | AngleDim | RadiusDim;
 export type Relation =
   | Coincident | PointOn | Midpoint | Horizontal | Vertical | Parallel
-  | Perpendicular | Equal | Tangent | Fixed | Link;
+  | Perpendicular | Equal | Tangent | Fixed | Link | SameValue;
 export type Constraint = Relation | Dimension;
 
 // Symbols are drawn on the figure but take no part in solving.
@@ -425,6 +433,8 @@ export interface Note {
   y: number;
   /** As typed: plain text, with $...$ for math and \\ between lines. */
   text: string;
+  /** How far it is turned about where it starts, counter-clockwise, in radians. Unset: level. */
+  angle?: number;
 }
 /**
  * A force on a point, drawn as an arrow. How long the arrow is follows the
@@ -850,7 +860,7 @@ export function isNamed(e: Entity | undefined): e is Line | Arc {
 
 /** True for curves that form the shapes of the figure: not helpers, centre lines, arrows, springs or dampers. */
 export function isEdge(e: Curve): boolean {
-  return !e.construction && !e.centre && !isNamed(e);
+  return !e.construction && !e.centre && !isNamed(e) && !((e.type === "bezier" || e.type === "spline") && e.arrow);
 }
 
 /** Removes a point that no curve is built on any more, unless it was placed on purpose. */
@@ -908,6 +918,8 @@ export function constraintRefs(c: Constraint): Id[] {
     case "perpendicular":
       return [c.l1, c.l2];
     case "tangent": return [c.l, c.c];
+    // The dimensions it holds equal: constraints, not entities.
+    case "sameValue": return [c.a, c.b];
     case "fixed": return [c.p];
     case "distance": return [c.a, c.b];
     case "angle": return [c.l1, c.l2];
@@ -1113,14 +1125,93 @@ export function remove(sk: Sketch, ids: Iterable<Id>): void {
   const alive = new Set(sk.entities.map((e) => e.id));
   // A link lives on with the pairs it has left; any other constraint needs everything it names.
   sk.constraints = sk.constraints.flatMap((c): Constraint[] => {
+    if (c.type === "sameValue") return [c];
     if (isLink(c)) {
       const kept = pruneLink(c, alive);
       return kept ? [kept] : [];
     }
     return constraintRefs(c).every((r) => alive.has(r)) ? [c] : [];
   });
+  // Two dimensions held equal: both must be left.
+  const dims = new Set(sk.constraints.filter(isDimension).map((c) => c.id));
+  sk.constraints = sk.constraints.filter((c) => c.type !== "sameValue" || (dims.has(c.a) && dims.has(c.b)));
   sk.symbols = sk.symbols.filter((s) => symbolRefs(s).every((r) => alive.has(r)));
   for (const s of sk.symbols) if (s.type === "fill") s.holes = s.holes.filter((h) => alive.has(h));
+}
+
+/**
+ * The dimensions held equal, in groups: every dimension that is equal to
+ * another is in one, with the others it is equal to, through any chain of
+ * them. In the order the dimensions are in the sketch.
+ */
+export function sameValueGroups(sk: Sketch): Dimension[][] {
+  const links = sk.constraints.filter((c): c is SameValue => c.type === "sameValue");
+  if (!links.length) return [];
+  const up = new Map<Id, Id>();
+  const root = (id: Id): Id => {
+    let r = id;
+    while (up.has(r) && up.get(r) !== r) r = up.get(r)!;
+    return r;
+  };
+  const dims = new Map(sk.constraints.filter(isDimension).map((d) => [d.id, d]));
+  for (const l of links) {
+    if (!dims.has(l.a) || !dims.has(l.b)) continue;
+    const a = root(l.a), b = root(l.b);
+    if (a !== b) up.set(b, a);
+  }
+  const groups = new Map<Id, Dimension[]>();
+  for (const d of dims.values()) {
+    if (!up.has(d.id) && ![...up.values()].includes(d.id)) continue;
+    const r = root(d.id);
+    groups.set(r, [...(groups.get(r) ?? []), d]);
+  }
+  return [...groups.values()].filter((g) => g.length > 1);
+}
+
+/** The dimensions a dimension is held equal to, itself among them; just itself when there are none. */
+export function sameValueGroup(sk: Sketch, d: Dimension): Dimension[] {
+  return sameValueGroups(sk).find((g) => g.includes(d)) ?? [d];
+}
+
+/** True when two dimensions measure the same kind of thing, so they can be held equal: two lengths, or two angles. */
+export function sameKind(a: Dimension, b: Dimension): boolean {
+  return (a.type === "angle") === (b.type === "angle");
+}
+
+/**
+ * What a dimension measures in the sketch as it is now, in the drawing's own
+ * units: a distance, an angle in radians counter-clockwise from its first
+ * line to its second, or a radius.
+ */
+export function measuredValue(sk: Sketch, d: Dimension): number {
+  if (d.type === "distance") {
+    const a = point(sk, d.a);
+    if (d.toLine) {
+      const l = entity(sk, d.b);
+      if (l?.type !== "line") return 0;
+      const p = point(sk, l.p1), q = point(sk, l.p2);
+      const tx = q.x - p.x, ty = q.y - p.y, tt = tx * tx + ty * ty;
+      if (tt < 1e-18) return Math.hypot(a.x - p.x, a.y - p.y);
+      return Math.abs((a.x - p.x) * ty - (a.y - p.y) * tx) / Math.sqrt(tt);
+    }
+    const b = point(sk, d.b);
+    if (d.mode === "horizontal") return Math.abs(b.x - a.x);
+    if (d.mode === "vertical") return Math.abs(b.y - a.y);
+    return Math.hypot(b.x - a.x, b.y - a.y);
+  }
+  if (d.type === "radius") {
+    const e = entity(sk, d.target);
+    return e?.type === "circle" ? e.r : e?.type === "arc" ? arcRadius(sk, e) : 0;
+  }
+  const l1 = entity(sk, d.l1), l2 = entity(sk, d.l2);
+  if (l1?.type !== "line" || l2?.type !== "line") return 0;
+  const dir = (l: Line, rev: boolean): [number, number] => {
+    const a = point(sk, rev ? l.p2 : l.p1), b = point(sk, rev ? l.p1 : l.p2);
+    return [b.x - a.x, b.y - a.y];
+  };
+  const d1 = dir(l1, d.rev1), d2 = dir(l2, d.rev2);
+  const v = Math.atan2(d1[0] * d2[1] - d1[1] * d2[0], d1[0] * d2[0] + d1[1] * d2[1]);
+  return v < 0 ? v + TWO_PI : v;
 }
 
 // ---- files --------------------------------------------------------------

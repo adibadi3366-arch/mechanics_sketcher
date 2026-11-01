@@ -4,8 +4,8 @@
 
 import { type Sketch, geometryExtent } from "./model";
 import {
-  type Prim, type StrokeStyle, type Outline, type Anchor, type LinePrim, type ArcPrim,
-  PAPER, PT_MM, STROKE_DASH, dashOf, strokeWidth, printMm, buildPrims, arrowHeads, strokedEnds, strokedSweep, textBox, textCorners, outlinePolygon,
+  type Prim, type StrokeStyle, type Outline, type Anchor, type LinePrim, type ArcPrim, type BezierPrim,
+  PAPER, PT_MM, STROKE_DASH, dashOf, strokeWidth, printMm, buildPrims, arrowHeads, strokedEnds, strokedSweep, strokedChain, textBox, textCorners, outlinePolygon,
 } from "./prims";
 import { type V, type Box, emptyBox, grow, boxIsEmpty, polar, wrap, TWO_PI, bezierPoints, chainCubics } from "./geom";
 import { texEngine } from "./tex";
@@ -105,7 +105,7 @@ export function figureBounds(prims: Prim[]): Box {
         const n = Math.max(2, Math.ceil((p.a1 - p.a0) / (Math.PI / 30)));
         for (let i = 0; i <= n; i++) grow(b, polar(p.c, p.r, p.a0 + ((p.a1 - p.a0) * i) / n), half);
       }
-      if (p.k === "line" || p.k === "arc") for (const head of arrowHeads(p)) for (const q of head) grow(b, q);
+      if (p.k === "line" || p.k === "arc" || p.k === "bezier") for (const head of arrowHeads(p)) for (const q of head) grow(b, q);
     }
   }
   return b;
@@ -180,7 +180,7 @@ export function primsToSvg(prims: Prim[], k = 1, page?: Box): string | null {
     } else if (p.k === "path") {
       body.push(`<polyline points="${p.pts.map(pt).join(" ")}" ${stroke}/>`);
     } else if (p.k === "bezier") {
-      const q = p.pts.map(M);
+      const q = strokedChain(p).map(M);
       let d = `M${num(q[0][0])} ${num(q[0][1])}`;
       for (let i = 1; i + 2 < q.length; i += 3) d += `C${num(q[i][0])} ${num(q[i][1])} ${num(q[i + 1][0])} ${num(q[i + 1][1])} ${num(q[i + 2][0])} ${num(q[i + 2][1])}`;
       body.push(`<path d="${d}" ${stroke}/>`);
@@ -191,7 +191,7 @@ export function primsToSvg(prims: Prim[], k = 1, page?: Box): string | null {
       // Counter-clockwise on paper is sweep-flag 0 once y is flipped.
       body.push(`<path d="M${num(s[0])} ${num(s[1])}A${r} ${r} 0 ${a1 - a0 > Math.PI ? 1 : 0} 0 ${num(e[0])} ${num(e[1])}" ${stroke}/>`);
     }
-    if (p.k === "line" || p.k === "arc") {
+    if (p.k === "line" || p.k === "arc" || p.k === "bezier") {
       for (const head of arrowHeads(p)) body.push(`<polygon points="${head.map(pt).join(" ")}" fill="${p.ink ?? "#000"}" stroke="none"/>`);
     }
   }
@@ -250,14 +250,14 @@ const stealth = (size: number): string =>
   `Stealth[length=${num(PAPER.arrowLen * size, 2)}mm, width=${num(PAPER.arrowWidth * size, 2)}mm, inset=${num(PAPER.arrowLen * size * 0.28, 2)}mm]`;
 
 /** Which named tip a head is: the one on dimensions, the larger one on arrows, the small one on spread loads, or none of them. */
-function tipName(p: LinePrim | ArcPrim): "tip" | "bigtip" | "smalltip" | null {
+function tipName(p: LinePrim | ArcPrim | BezierPrim): "tip" | "bigtip" | "smalltip" | null {
   const head = p.head ?? 1;
   const is = (size: number) => Math.abs(head - size) < 1e-9;
   return is(1) ? "tip" : is(PAPER.arrowScale) ? "bigtip" : is(PAPER.loadHead) ? "smalltip" : null;
 }
 
 /** Arrow tips as a TikZ option. A head of any other size than the two named ones is spelled out; `k` is the dimension size. */
-function tips(p: LinePrim | ArcPrim, k: number): string {
+function tips(p: LinePrim | ArcPrim | BezierPrim, k: number): string {
   const t = tipName(p) ?? `{${stealth((p.head ?? 1) * k)}}`;
   if (p.arrowA && p.arrowB) return `, ${t}-${t}`;
   if (p.arrowA) return `, ${t}-`;
@@ -307,7 +307,7 @@ export function tikzParts(prims: Prim[], k = 1): { styles: string[]; lines: stri
   let needTip = false, needBigTip = false, needSmallTip = false, needArrows = false, needLabel = false;
   /** A tip sits on an arc: the bending library turns it to follow the curve. */
   let bentTip = false;
-  const noteTip = (p: LinePrim | ArcPrim) => {
+  const noteTip = (p: LinePrim | ArcPrim | BezierPrim) => {
     needArrows = true;
     const name = tipName(p);
     if (name === "bigtip") needBigTip = true;
@@ -368,7 +368,11 @@ export function tikzParts(prims: Prim[], k = 1): { styles: string[]; lines: stri
       const q = p.pts;
       const pieces: string[] = [];
       for (let i = 1; i + 2 < q.length; i += 3) pieces.push(`.. controls ${co(q[i])} and ${co(q[i + 1])} .. ${co(q[i + 2])}`);
-      lines.push(`  \\draw[${style(p)}] ${co(q[0])} ${pieces.join("\n    ")};`);
+      if (p.arrowA || p.arrowB) {
+        noteTip(p);
+        bentTip = true;
+      }
+      lines.push(`  \\draw[${style(p)}${tips(p, k)}] ${co(q[0])} ${pieces.join("\n    ")};`);
     } else if (p.k === "path") {
       // A long curve is broken over lines of the file, so no line of it grows past what an editor shows.
       const rows: string[] = [];

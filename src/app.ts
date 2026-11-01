@@ -7,7 +7,7 @@ import {
   type ArrowEnds, type Datum, type BalloonFrame, HATCH_GAP, PICTURE_OPACITY, type AnyLoad, type LoadKind, type Diagram, type Plot, isLoad, loadKind, geometryExtent,
   type LineElement, type ElementLook, type Entity, type FreeCurve, isFreeCurve, isNamed, arcAngles, newId, controlPoints, addBezier, addSpline,
   ORIGIN, emptySketch, entity, point, constraint, symbol, symbolRefs, points, curves, curvePoints,
-  constraintRefs, isDimension, isLengthDimension, unitScale, fixedPoints, isLink, isFixed, arcRadius, addPoint, addLine, addCircle, addArc, addConstraint,
+  constraintRefs, isDimension, isLengthDimension, unitScale, sameValueGroup, sameKind, fixedPoints, isLink, isFixed, arcRadius, addPoint, addLine, addCircle, addArc, addConstraint,
   addSupport, addFrame, addSymbol, remove, serialize, deserialize, clone,
 } from "./model";
 import { SketchSolver, type Drag, type SolveResult, type Freedom } from "./solver";
@@ -17,9 +17,9 @@ import {
   type Box, projectOnSegment, intersectLines, distToSegment, boxIsEmpty, grow, TWO_PI, splineCubics, chainNearest, chainPoints,
 } from "./geom";
 import {
-  type Prim, PAPER, PT_MM, printMm, geometryBox, buildPrims, dimensionPrims,
+  type Prim, type TextPrim, textCorners, PAPER, PT_MM, printMm, geometryBox, buildPrims, dimensionPrims,
   primDistance, textCentre, distanceFrame, angleFrame, roundFrame, symbolPosition, balloonAnchor, measuredValue, measuredDimValue, settleLengthScale,
-  curveParam, sideOfCurve, formatNumber, frameTips, arrowLabelAt, arrowAnchor, centerMarkEnds, etalonEnds, rightAngleFrame,
+  curveParam, sideOfCurve, formatNumber, frameTips, arrowLabelAt, arrowAnchor, centerMarkEnds, etalonEnds, noteGrip, rightAngleFrame,
   centerMarkDashes, curveLength, hatchCount, standardWeight, cubicsOf, loadScaleOf, loadLabel, loadReach, lineLoadFrame,
 } from "./prims";
 import {
@@ -35,7 +35,7 @@ import { showTexFields } from "./texfield";
 import { numberBox, showInBox } from "./slidernum";
 import { packDrawing, svgWithDrawing, texWithDrawing, readOpened, EMPTY_SVG } from "./embed";
 import { type ImportStyle, importSvg } from "./svgimport";
-import { type Drawing, type Part, splitDrawing, mergeDrawing, activePart, shareSettings, entityIndex, followSources, isOrphan } from "./parts";
+import { type Drawing, type Part, splitDrawing, mergeDrawing, activePart, shareSettings, entityIndex, followSources, isOrphan, moveToPart } from "./parts";
 import { BETA, EXPORT_WAIT_SECONDS, NEWS_ID, REPORT_EMAIL, SUPPORT_URL } from "./config";
 import { news } from "./news";
 import { type ReportKind, composeReport } from "./report";
@@ -189,7 +189,7 @@ const TOOLS: ToolDef[] = [
   { id: "vertical", label: "Vertical", key: "V", icon: "vertical", tab: "sketch", group: 3, need: "a line, or two points" },
   { id: "parallel", label: "Parallel", icon: "parallel", tab: "sketch", group: 3, need: "two lines" },
   { id: "perpendicular", label: "Perpendicular", icon: "perpendicular", tab: "sketch", group: 3, need: "two lines" },
-  { id: "equal", label: "Equal", key: "E", icon: "equal", tab: "sketch", group: 3, need: "two lines, or two circles" },
+  { id: "equal", label: "Equal", key: "E", icon: "equal", tab: "sketch", group: 3, need: "two lines, two circles, or two dimensions or measures" },
   { id: "coincident", label: "Coincident", key: "O", icon: "coincident", tab: "sketch", group: 3, need: "two points, or a point and a line or circle" },
   { id: "midpoint", label: "Midpoint", key: "M", icon: "midpoint", tab: "sketch", group: 3, need: "a point and a line" },
   { id: "tangent", label: "Tangent", key: "T", icon: "tangent", tab: "sketch", group: 3, need: "a line and a circle or arc, or two circles or arcs" },
@@ -237,7 +237,7 @@ const RELATION_NAMES: Record<string, string> = {
   coincident: "Coincident", pointOn: "Point on curve", midpoint: "Midpoint", horizontal: "Horizontal",
   vertical: "Vertical", parallel: "Parallel", perpendicular: "Perpendicular", equal: "Equal",
   tangent: "Tangent", fixed: "Fixed point", distance: "Distance", angle: "Angle", radius: "Radius",
-  mirror: "Mirror image", shift: "Linear pattern", turn: "Circular pattern",
+  mirror: "Mirror image", shift: "Linear pattern", turn: "Circular pattern", sameValue: "Equal value",
 };
 /** How far the supports can be scaled against the other symbols, in per cent. */
 const SUPPORT_SCALE_MIN = 30, SUPPORT_SCALE_MAX = 300;
@@ -416,6 +416,10 @@ export class App {
   private editing: EditTarget | null = null;
   /** The last thing picked with the Select tool, for stepping through overlaps. */
   private lastPick: { pos: V; id: Id; time: number } | null = null;
+  /** The last click on a sketch's tab: a second one soon after on the same tab renames it. */
+  private lastTabClick: { id: Id; time: number } | null = null;
+  /** A sketch's name is being typed on its tab: the strip is not redrawn under it. */
+  private renaming = false;
 
   private prims: Prim[] = [];
   private glyphs: Glyph[] = [];
@@ -765,7 +769,7 @@ export class App {
     this.fig = this.preview ? fitFigure(this.figureSketch()) : null;
     const mm = this.mm();
     this.prims = this.fig ? this.fig.prims : buildPrims(this.sk, mm, { editor: !this.preview });
-    this.glyphs = this.preview ? [] : layoutGlyphs(this.sk, this.view, this.glyphFilter());
+    this.glyphs = this.preview ? [] : layoutGlyphs(this.sk, this.view, this.glyphFilter(), (id) => this.labelEnd(id, mm));
 
     const related = new Set<Id>();
     for (const id of this.selection) {
@@ -850,6 +854,7 @@ export class App {
     }
     return (c) => {
       if (sel.has(c.id) || flagged.has(c.id)) return true;
+      if (c.type === "sameValue") return sel.has(c.a) || sel.has(c.b);
       if (c.type === "horizontal" || c.type === "vertical") {
         // Held between two points: it belongs to those points and to the line that joins them,
         // not to every other line that happens to share an end.
@@ -857,6 +862,14 @@ export class App {
       }
       return constraintRefs(c).some((r) => active.has(r));
     };
+  }
+
+  /** Where a dimension's number ends on screen, at the middle of its right side; null when it has none showing. */
+  private labelEnd(id: Id, mm: number): V | null {
+    const p = this.prims.find((q): q is TextPrim => q.ref === id && q.k === "text");
+    if (!p) return null;
+    const pts = textCorners(p).map((q) => toScreen(this.view, [q[0] / mm, q[1] / mm]));
+    return [Math.max(...pts.map((q) => q[0])), pts.reduce((s, q) => s + q[1], 0) / pts.length];
   }
 
   /** Handles on the selected symbol: the tips of a pair of axes or the ends of a centre mark, which can be pulled. Screen pixels. */
@@ -869,6 +882,7 @@ export class App {
       at = [tips.x, tips.y].filter((t): t is V => t !== null);
     } else if (s.type === "centermark") at = centerMarkEnds(this.sk, s, mm);
     else if (s.type === "etalon") at = [etalonEnds(s, mm)[1]];
+    else if (s.type === "note") at = [noteGrip(s, mm)].filter((q): q is V => q !== null);
     else if (s.type === "picture") at = [[(s.x + s.w) * mm, (s.y + s.h) * mm]];
     else if (s.type === "balloon" && Math.hypot(s.dx, s.dy) > 1e-12) at = [mul(balloonAnchor(this.sk, s), mm)];
     else if (s.type === "lineload") {
@@ -938,7 +952,7 @@ export class App {
           return p ? "Click where the arrow points. Hold Alt to switch snapping off."
             : `Click where the arrow starts. It is constrained and dimensioned like a line. ${done}`;
         }
-        return p ? "Click where the line ends. Hold Alt to switch snapping off."
+        return p ? "Click where the line ends; the next one starts there. Esc or a right-click stops, and the tool stays for a new line. Hold Alt to switch snapping off."
           : `Click where the ${this.tool === "line" ? "line" : "centre line"} starts. ${done}`;
       case "trim": return `Click the part of a line, circle or arc to remove, up to where other curves cross it. Or hold the button and drag across everything that should go. ${done}`;
       case "project": return `Click a line, circle, arc or point of a sketch to the left of this one to bring it in as reference geometry, which follows it. ${done}`;
@@ -1238,7 +1252,6 @@ export class App {
     return sym ? names[sym.type] ?? "a symbol" : "something";
   }
 
-  /** The point a drawing tool's next click is measured from, for H/V inference. */
   /** True when two picks are the same place: the same point, or within a few pixels on screen. */
   private sameSpot(a: Snap, b: Snap): boolean {
     return (a.pointId !== undefined && a.pointId === b.pointId) || dist(toScreen(this.view, a.pos), toScreen(this.view, b.pos)) < 4;
@@ -1270,6 +1283,7 @@ export class App {
     return [a, add(a, mul(sub(q, a), 2 / 3)), add(b, mul(sub(q, b), 2 / 3)), b];
   }
 
+  /** The point a drawing tool's next click is measured from, for H/V inference. */
   private snapAnchor(): V | undefined {
     const p = this.pending;
     if (p?.tool === "line") return p.start.pos;
@@ -1424,9 +1438,13 @@ export class App {
         else if (dx < 7 && dy > 14) axis = "v";
       }
       if (axis) autos.push({ type: axis === "h" ? "horizontal" : "vertical", a, b });
-      // One line per pair of clicks: the next click starts a new one.
+      // A line or centre line goes on from where it ended, until it ends on a joint that was
+      // there already (closing a shape) or Esc stops it. Arrows, springs and dampers come one at a time.
+      const chain = (this.tool === "line" || this.tool === "centerline") && snap.pointId === undefined;
       this.pending = null;
       this.finishDrawing(autos);
+      const end = entity(this.sk, b);
+      if (chain && end?.type === "point") this.pending = { tool: "line", start: { pos: [end.x, end.y], pointId: b } };
       // The name of an arrow, a spring or a damper is typed right away, where it will sit; clicking on leaves it without one.
       if (isNamed(line)) this.openEditor({ kind: "arrow", id: line.id });
       return;
@@ -1948,6 +1966,7 @@ export class App {
 
   /** The strip at the bottom: one tab for each sketch, and one to add another. */
   private drawStrip(): void {
+    if (this.renaming) return;
     const strip = $("#sheets");
     const one = this.drawing.parts.length === 1;
     strip.innerHTML = this.drawing.parts.map((p) => {
@@ -2114,11 +2133,60 @@ export class App {
     this.toast(`${gone.info.name} is deleted. Undo brings it back.`);
   }
 
+  /** The choice of another sketch to move the selection to, when the drawing has room for one. */
+  private moveField(): string {
+    const others = this.drawing.parts.filter((p) => p.info.id !== this.drawing.active);
+    return `<label class="field move-field"><span>Move to sketch</span><select data-field="move-to"><option value="">Choose a sketch…</option>` +
+      others.map((p) => `<option value="${p.info.id}">${esc(p.info.name)}</option>`).join("") +
+      `<option value="new">A new sketch</option></select>` +
+      `<small>The selection goes there with its constraints, dimensions and symbols. Points that what stays here uses too stay, and a copy goes along${others.length ? ", projected from them when that sketch comes later" : ""}.</small></label>`;
+  }
+
+  /** Moves the selected geometry and symbols to another sketch, or to a new one after the others, and stays in this one. */
+  private moveSelectionTo(to: Id | "new"): void {
+    const ids = [...this.selection];
+    if (!ids.length) return;
+    let id = to;
+    let made: Part | null = null;
+    if (to === "new") {
+      const taken = new Set(this.drawing.parts.map((p) => p.info.name));
+      let n = this.drawing.parts.length + 1;
+      while (taken.has(`Sketch ${n}`)) n++;
+      const sk = { entities: [this.sk.entities.find((e) => e.id === ORIGIN)!], constraints: [], symbols: [] } as unknown as Sketch;
+      shareSettings(this.sk, sk);
+      made = { info: { id: newId(this.sk, "sketch"), name: `Sketch ${n}` }, sk };
+      this.drawing.parts.push(made);
+      id = made.info.id;
+    }
+    activePart(this.drawing).sk = this.sk;
+    const report = moveToPart(this.drawing, this.sk, ids, id);
+    const target = this.drawing.parts.find((p) => p.info.id === id);
+    if (!report || !target) {
+      if (made) this.drawing.parts = this.drawing.parts.filter((p) => p !== made);
+      return this.toast("Nothing selected can move: projected geometry belongs to the sketch it comes from.");
+    }
+    this.selection.clear();
+    this.hover = null;
+    this.solve();
+    this.commit();
+    const count = (n: number, one: string, many: string) => (n ? `${n} ${n === 1 ? one : many}` : "");
+    const what = [count(report.curves, "curve", "curves"), count(report.moved - report.curves, "point", "points"), count(report.symbols, "symbol", "symbols")].filter(Boolean).join(", ") || "the selection";
+    const notes = [
+      report.copied ? `${report.copied} shared ${report.copied === 1 ? "point stays here, with a copy" : "points stay here, with copies"} there` : "",
+      report.dropped ? `${report.dropped} ${report.dropped === 1 ? "constraint" : "constraints"} tying it to this sketch dropped` : "",
+    ].filter(Boolean);
+    this.toast(`Moved ${what} to ${target.info.name}${notes.length ? `. ${notes.join("; ")}` : ""}.`);
+  }
+
   /** Renames a sketch, in place on its tab. */
   private renameSketch(id: Id): void {
+    // The strip as it is now, with the box in place of the tab's name; it is left alone until the name is in.
+    this.renaming = false;
+    this.drawStrip();
     const tab = $("#sheets").querySelector<HTMLElement>(`[data-part="${id}"] .sheet-name`);
     const part = this.drawing.parts.find((p) => p.info.id === id);
     if (!tab || !part) return;
+    this.renaming = true;
     const box = document.createElement("input");
     box.className = "sheet-rename";
     box.value = part.info.name;
@@ -2130,6 +2198,7 @@ export class App {
     const finish = (keep: boolean) => {
       if (done) return;
       done = true;
+      this.renaming = false;
       const name = box.value.trim();
       if (keep && name && name !== part.info.name) {
         part.info.name = name;
@@ -2153,7 +2222,17 @@ export class App {
     const part = this.drawing.parts.find((p) => p.info.id === id);
     switch (btn.dataset.sheet) {
       case "add": return this.addSketch();
-      case "open": return id ? this.openSketch(id) : undefined;
+      case "open": {
+        if (!id) return;
+        // A second click soon after the first, on a tab that the first one opened, renames it as a double-click does.
+        const now = performance.now(), last = this.lastTabClick;
+        this.lastTabClick = { id, time: now };
+        if (last?.id === id && now - last.time < 500 && id === this.drawing.active) {
+          this.lastTabClick = null;
+          return this.renameSketch(id);
+        }
+        return this.openSketch(id);
+      }
       case "delete": return this.deleteSketch();
       case "hide":
         if (!part || part.info.id === this.drawing.active) return;
@@ -2731,6 +2810,19 @@ export class App {
   }
 
   /** Pulls the far end of an etalon: how long it is, at a round length, and which way it runs, in steps of 15 degrees. Alt lets both go free. */
+  /** Turns a note about where it starts, towards the pointer: in steps of 15° unless Alt is held. */
+  private turnNote(id: Id, sp: V): void {
+    const s = symbol(this.sk, id);
+    if (s?.type !== "note") return;
+    const v = sub(toModel(this.view, sp), [s.x, s.y]);
+    if (Math.hypot(v[0], v[1]) * this.view.scale < 8) return;
+    let a = angleOf(v);
+    if (!this.altKey) a = Math.round(a / (15 * DEG)) * 15 * DEG;
+    a = wrap(a + Math.PI) - Math.PI;
+    if (Math.abs(a) < 1e-9) delete s.angle;
+    else s.angle = a;
+  }
+
   private dragEtalonEnd(id: Id, sp: V): void {
     const s = symbol(this.sk, id);
     if (s?.type !== "etalon") return;
@@ -2794,6 +2886,11 @@ export class App {
       const s = symbol(this.sk, id);
       if (s && (s.type === "support" || s.type === "frame" || s.type === "centermark" || s.type === "load" || s.type === "moment" || s.type === "etalon")) {
         s.angle = wrap(s.angle + by + Math.PI) - Math.PI;
+        turned = true;
+      } else if (s?.type === "note") {
+        const a = wrap((s.angle ?? 0) + by + Math.PI) - Math.PI;
+        if (Math.abs(a) < 1e-9) delete s.angle;
+        else s.angle = a;
         turned = true;
       }
     }
@@ -2874,7 +2971,7 @@ export class App {
     }
     // And the far end of a selected etalon, and the tip of a selected balloon's leader.
     if (chosen && !ev.shiftKey && this.gripsAt(sp)) {
-      if (chosen.type === "etalon" || chosen.type === "picture") this.drag = { kind: "stretch", id: chosen.id, startScreen: sp, moved: false };
+      if (chosen.type === "etalon" || chosen.type === "picture" || chosen.type === "note") this.drag = { kind: "stretch", id: chosen.id, startScreen: sp, moved: false };
       else if (chosen.type === "balloon") this.drag = { kind: "tip", id: chosen.id, startScreen: sp, centre: add(balloonAnchor(this.sk, chosen), [chosen.dx, chosen.dy]), moved: false };
       if (this.drag) return this.touch();
     }
@@ -2999,7 +3096,9 @@ export class App {
     } else if (d?.kind === "stretch") {
       if (!d.moved && dist(sp, d.startScreen) < 3) return;
       d.moved = true;
-      if (symbol(this.sk, d.id)?.type === "picture") this.dragPictureCorner(d.id, sp);
+      const kind = symbol(this.sk, d.id)?.type;
+      if (kind === "picture") this.dragPictureCorner(d.id, sp);
+      else if (kind === "note") this.turnNote(d.id, sp);
       else this.dragEtalonEnd(d.id, sp);
       this.chromeDirty = true;
     } else if (d?.kind === "span") {
@@ -3467,9 +3566,18 @@ export class App {
       return false;
     }
 
+    const group = sameValueGroup(this.sk, d);
+    if (group.some((m) => m.driven)) {
+      this.toast("It is held equal to a dimension of fixed geometry, so it shows what that measures.");
+      return false;
+    }
+    /** Sets the value on the dimension and every dimension held equal to it. */
+    const put = (sk: Sketch, value: number) => {
+      for (const m of sameValueGroup(sk, constraint(sk, id) as Dimension)) if (!m.measure) m.value = value;
+    };
     const before = clone(this.sk);
     const old = d.value;
-    d.value = v;
+    put(this.sk, v);
     // The only length dimension there is has nothing to be measured against: it says what its line is worth, and nothing moves.
     const only = isLengthDimension(d) && this.allConstraints().filter(isLengthDimension).length === 1;
     const drawn = measuredValue(this.sk, d);
@@ -3481,10 +3589,9 @@ export class App {
     if (!r.ok) {
       // A big jump can fail from the current shape; walk there in small steps.
       this.sk = clone(before);
-      const dd = constraint(this.sk, id) as Dimension;
       const STEPS = 16;
       for (let k = 1; k <= STEPS; k++) {
-        dd.value = old + ((v - old) * k) / STEPS;
+        put(this.sk, old + ((v - old) * k) / STEPS);
         r = this.solver.solve(this.sk);
         if (!r.ok) break;
       }
@@ -3688,10 +3795,13 @@ export class App {
 
   /** True when the picked geometry is exactly what the command needs. */
   private canApply(cmd: Command): boolean {
-    const { pts, lines, rounds, beziers } = this.picked();
+    const { pts, lines, rounds, beziers, cons } = this.picked();
     // No constraint or dimension takes a Bézier curve; only its points.
     if (beziers.length) return false;
     const P = pts.length, L = lines.length, R = rounds.length;
+    const D = cons.filter(isDimension);
+    // Dimensions and measures held equal: two or more of one kind, and nothing else.
+    if (cmd === "equal" && D.length && !(P + L + R)) return D.length >= 2 && D.length === cons.length && D.every((d) => sameKind(d, D[0]));
     switch (cmd) {
       case "horizontal":
       case "vertical":
@@ -3711,8 +3821,9 @@ export class App {
 
   /** True when one more pick could complete what the command needs. */
   private couldGrow(cmd: Command): boolean {
-    const { pts, lines, rounds } = this.picked();
+    const { pts, lines, rounds, cons } = this.picked();
     const P = pts.length, L = lines.length, R = rounds.length;
+    if (cmd === "equal" && cons.length === 1 && isDimension(cons[0]) && !(P + L + R)) return true;
     const only = (n: number) => n === 1 && P + L + R === 1;
     switch (cmd) {
       case "horizontal":
@@ -3739,10 +3850,13 @@ export class App {
   private commandClick(sp: V): void {
     const cmd = this.tool as Command;
     const info = toolDef(cmd);
-    // Picks are geometry; a dimension left selected by the last placement is dropped.
-    for (const id of [...this.selection]) if (!entity(this.sk, id)) this.selection.delete(id);
+    // Picks are geometry; a dimension left selected by the last placement is dropped. Equal takes dimensions too.
+    const pickable = (id: Id) => !!entity(this.sk, id) || (cmd === "equal" && isDimension(constraint(this.sk, id) ?? ({ type: "fixed" } as Constraint)));
+    for (const id of [...this.selection]) if (!pickable(id)) this.selection.delete(id);
 
-    const hit = this.hitTest(sp, true);
+    const hit = cmd === "equal"
+      ? this.hitCandidates(sp).find((h) => pickable(h.id)) ?? null
+      : this.hitTest(sp, true);
     if (!hit) {
       if (isPlaced(cmd) && this.canApply(cmd)) this.placeDimension(sp);
       else this.selection.clear();
@@ -3775,7 +3889,8 @@ export class App {
    * applies straight away; otherwise it becomes the tool and waits for picks.
    */
   private activate(cmd: Command): void {
-    if (this.tool === "select" && this.picked().entities > 0 && this.canApply(cmd)) {
+    const picked = this.picked();
+    if (this.tool === "select" && (picked.entities > 0 || picked.cons.length > 0) && this.canApply(cmd)) {
       this.showTip(cmd);
       if (isPlaced(cmd)) this.createDimension(undefined, cmd === "measure");
       else this.run(cmd);
@@ -3811,6 +3926,32 @@ export class App {
     return made;
   }
 
+  /**
+   * Holds dimensions and measures to one value. A dimension of fixed geometry
+   * among them says what it is; failing that, the first dimension picked
+   * does, and the others take its value. A measure is held to it too.
+   */
+  private equalDimensions(dims: Dimension[]): void {
+    if (dims.length < 2) return;
+    if (!dims.every((d) => sameKind(d, dims[0]))) return this.toast("Only lengths can be equal to lengths, and angles to angles.");
+    const original = clone(this.sk);
+    const fixed = dims.find((d) => d.driven);
+    const lead = fixed ?? dims.find((d) => !d.measure);
+    if (lead) {
+      const value = lead.driven ? measuredDimValue(this.sk, lead) : lead.value;
+      for (const d of dims) for (const m of sameValueGroup(this.sk, d)) if (!m.measure && !m.driven) m.value = value;
+    }
+    const drafts: ConstraintDraft[] = dims.slice(1).map((d, i) => ({ type: "sameValue", a: dims[i].id, b: d.id }));
+    const made = this.addManual(drafts, "Those already measure the same, held by other constraints.");
+    if (!made) {
+      this.sk = original;
+      this.solve();
+      this.touch();
+      return;
+    }
+    this.selection = new Set(dims.map((d) => d.id));
+  }
+
   /** Applies a constraint to the picked geometry. */
   private run(cmd: Exclude<Command, "dimension" | "measure">): void {
     const info = toolDef(cmd);
@@ -3818,9 +3959,10 @@ export class App {
       this.toast(`${info.label} needs ${info.need}.`);
       return;
     }
-    const { pts, lines, rounds } = this.picked();
+    const { pts, lines, rounds, cons } = this.picked();
     const drafts: ConstraintDraft[] = [];
     const replacing: Id[] = [];
+    if (cmd === "equal" && !lines.length && !rounds.length) return this.equalDimensions(cons.filter(isDimension));
     switch (cmd) {
       case "horizontal":
       case "vertical":
@@ -4342,7 +4484,19 @@ export class App {
       return `${RELATION_NAMES[c.type]} ${this.shownValue(c)}${unit}${label}`;
     }
     if (c.type === "turn") return `${RELATION_NAMES[c.type]}, ${formatNumber(Number((c.angle / DEG).toFixed(3)))}° apart`;
+    if (c.type === "sameValue") {
+      const a = constraint(this.sk, c.a), b = constraint(this.sk, c.b);
+      const say = (d: Constraint | undefined) => (d && isDimension(d) ? `${d.measure ? "measure" : RELATION_NAMES[d.type].toLowerCase()} ${this.shownValue(d)}${d.type === "angle" ? "°" : ""}` : "?");
+      return `Equal: ${say(a)} and ${say(b)}`;
+    }
     return RELATION_NAMES[c.type];
+  }
+
+  /** What a dimension or measure is held equal to, and how to hold it equal to another. */
+  private equalRows(d: Dimension): string {
+    const links = this.sk.constraints.filter((c) => c.type === "sameValue" && (c.a === d.id || c.b === d.id));
+    if (links.length) return `<h3>Held equal</h3>${this.constraintRows(links)}`;
+    return `<p class="muted note-block">To hold it equal to another dimension or a measure, select both and press Equal (E).</p>`;
   }
 
   private constraintRows(list: Constraint[]): string {
@@ -4350,7 +4504,7 @@ export class App {
     const bad = new Set(this.result.conflicting), extra = new Set(this.result.redundant);
     return `<ul class="rows">${list.map((c) => {
       const flag = bad.has(c.id) ? `<span class="flag bad">conflicts</span>` : extra.has(c.id) ? `<span class="flag extra">redundant</span>` : "";
-      const ico = isDimension(c) ? "dimension" : c.type;
+      const ico = isDimension(c) ? "dimension" : c.type === "sameValue" ? "equal" : c.type;
       return `<li><button type="button" class="row" data-select="${c.id}">${icon(ico, 16)}<span>${esc(this.describe(c))}</span>${flag}</button>` +
         `<button type="button" class="row-del" data-delete="${c.id}" aria-label="Delete ${esc(this.describe(c))}" title="Delete">${icon("trash", 16)}</button></li>`;
     }).join("")}</ul>`;
@@ -4594,6 +4748,8 @@ export class App {
       case "note":
         html += `<h2>Note</h2>`;
         html += text("Text", "sym-text", s.text, "Plain text. Put math between dollar signs, as in $F_1 = 2a$, and \\\\ where a new line starts. Clicking the note on the drawing edits it there; dragging moves it.");
+        html += number("Rotation (degrees)", "sym-angle", degrees(s.angle ?? 0), "Anticlockwise, about where the text starts. Drag the handle past its end to turn it, in steps of 15° (hold Alt for any angle).");
+        html += rotate;
         break;
       case "datum":
         html += `<h2>${s.mass ? "Centre of mass" : "Datum point"}</h2>`;
@@ -4684,6 +4840,7 @@ export class App {
         html += `<div class="field"><span id="mode-label">Measured</span><div class="segmented" role="group" aria-labelledby="mode-label">${modes.map(([m, name]) =>
           `<button type="button" data-mode="${m}" aria-pressed="${d.mode === m}">${name}</button>`).join("")}</div></div>`;
       }
+      html += this.equalRows(d);
       html += `<button type="button" class="plain" data-act="measure-to-dim" title="A dimension of the value it shows now: it then holds the geometry to it">Make it a dimension</button>`;
       html += `<button type="button" class="danger" data-act="delete">Delete measure</button>`;
     } else if (cons.length === 1 && entities === 0 && !syms.length && isDimension(cons[0])) {
@@ -4711,9 +4868,10 @@ export class App {
           `<small>${d.outside ? "Empty: a standard length. " : "Empty: the arrow starts at the centre. "}Dragging the dimension sets the length too, and pulling it across the rim moves it inside or outside.</small></label>`;
       }
       html += `<label class="check"><input data-field="hidden" type="checkbox"${d.hidden ? " checked" : ""}><span>Leave out of the figure</span></label>`;
+      html += this.equalRows(d);
       html += `<button type="button" class="danger" data-act="delete">Delete dimension</button>`;
     } else if (syms.length === 1 && entities === 0 && !cons.length) {
-      html += this.symbolPanel(syms[0]);
+      html += this.symbolPanel(syms[0], this.moveField());
     } else if (entities === 1 && pts.length === 1 && !syms.length && !cons.length && this.datumOn(pts[0].id)) {
       // The dot of a datum point is the point itself: show the datum, with what holds the point.
       const attached = this.sk.constraints.filter((c) => constraintRefs(c).includes(pts[0].id));
@@ -4723,6 +4881,14 @@ export class App {
     } else if (cons.length >= 1 && entities === 0 && !syms.length) {
       html += `<h2>${cons.length === 1 ? RELATION_NAMES[cons[0].type] : `${cons.length} constraints`}</h2>`;
       html += this.constraintRows(cons);
+      // Dimensions picked together: what holds them equal, or how to.
+      const dims = cons.filter(isDimension);
+      if (dims.length >= 2 && dims.length === cons.length) {
+        const ids = new Set(dims.map((d) => d.id));
+        const links = this.sk.constraints.filter((c) => c.type === "sameValue" && (ids.has(c.a) || ids.has(c.b)));
+        if (links.length) html += `<h3>Held equal</h3>${this.constraintRows(links)}`;
+        else if (dims.every((d) => sameKind(d, dims[0]))) html += `<button type="button" class="plain" data-cmd="equal">Hold them equal (E)</button>`;
+      }
       const only = cons.length === 1 ? cons[0] : null;
       if (only?.type === "turn") {
         html += `<label class="field note-block"><span>Angle between copies (degrees)</span><input data-field="turn-angle" type="text" inputmode="decimal" value="${formatNumber(Number((only.angle / DEG).toFixed(3)))}"></label>`;
@@ -4788,6 +4954,15 @@ export class App {
         const own = cs.some((c) => c.weight !== undefined);
         html += `<label class="field"><span>Line thickness</span><span class="slider-row"><input data-field="weight" type="range" min="${WEIGHT_MIN}" max="${WEIGHT_MAX}" step="0.1" value="${weight}">${numberBox('data-num="weight"', this.weightLabel(weight), "Line thickness")}</span>` +
           `<small>In points, as LaTeX counts line widths${own ? "" : "; this is the standard thickness"}. It grows and shrinks with the dimension size in print. Double-click the slider to go back to the standard.</small></label>`;
+        // Arrowheads on the ends of open Bézier curves and splines.
+        const free = cs.filter((c): c is FreeCurve => isFreeCurve(c) && !(c.type === "spline" && c.closed));
+        if (free.length && free.length === cs.length && !cs.some((c) => c.construction)) {
+          const now = free.every((c) => c.arrow === free[0].arrow) ? free[0].arrow ?? "none" : null;
+          const heads: [string, string][] = [["none", "None"], ["end", "End"], ["start", "Start"], ["both", "Both"]];
+          html += `<div class="field"><span id="fhead-label">Arrowheads</span><div class="segmented wrap" role="group" aria-labelledby="fhead-label">${heads.map(([h, name]) =>
+            `<button type="button" data-fhead="${h}" aria-pressed="${now === h}">${name}</button>`).join("")}</div>` +
+            `<small>The end is the last point clicked. With a head it is drawn as an arrow is, and it no longer bounds a fill.</small></div>`;
+        }
         const only = cs.length === 1 ? cs[0] : undefined;
         const named = isNamed(only) ? only : null;
         if (named?.element) {
@@ -4810,6 +4985,7 @@ export class App {
         html += `<h3>Constraints on the selection</h3>`;
         html += attached.length ? this.constraintRows(attached) : `<p class="muted">None yet.</p>`;
       }
+      html += this.moveField();
       html += `<button type="button" class="danger" data-act="delete">Delete selection</button>`;
     } else {
       html += `<h2>Nothing selected</h2>`;
@@ -4933,6 +5109,7 @@ export class App {
       else if (ds.skcolor) this.setSketchColor(ds.skcolor === "none" ? null : ds.skcolor);
       else if (ds.color) this.setColor(ds.color);
       else if (ds.head) this.setArrowHead(ds.head as ArrowEnds);
+      else if (ds.fhead) this.setCurveHeads(ds.fhead === "none" ? null : (ds.fhead as ArrowEnds));
       else if (ds.place) this.setRadiusPlace(ds.place === "outside");
       else if (ds.beam) { this.beamEnds = ds.beam as BeamEnds; this.touch(); }
       else if (ds.report) { this.reportKind = ds.report as ReportKind; this.updateReport(); }
@@ -5231,7 +5408,8 @@ export class App {
     const swatch = (c: string, label: string) =>
       `<button type="button" class="swatch" data-skcolor="${c || "none"}" aria-pressed="${now === c}" aria-label="${label}" title="${label}" style="background:${c || "#17201b"}"></button>`;
     const weight = this.sk.lineWeight ?? Number((PAPER.member / PT_MM).toFixed(2));
-    return `<details class="sketch-style"${this.sk.lineColor || this.sk.lineWeight !== undefined ? " open" : ""}><summary>Lines of ${name}</summary>` +
+    return `<label class="field sketch-name-field"><span>Name of this sketch</span><input data-field="sketch-name" type="text" spellcheck="false" value="${name}"><small>Shown on its tab at the bottom. Double-clicking the tab renames it too.</small></label>` +
+      `<details class="sketch-style"${this.sk.lineColor || this.sk.lineWeight !== undefined ? " open" : ""}><summary>Lines of ${name}</summary>` +
       `<div class="field"><span id="skcolour-label">Colour</span><div class="swatches" role="group" aria-labelledby="skcolour-label">` +
       swatch("", "Black") + CURVE_COLORS.map((c) => swatch(c, `Colour ${c}`)).join("") +
       `<label class="swatch custom" title="Another colour"><input data-field="sketch-color" type="color" value="${esc(now || "#17201b")}" aria-label="Another colour"></label></div></div>` +
@@ -5301,6 +5479,16 @@ export class App {
     if (this.selection.size !== 1) return null;
     const e = entity(this.sk, [...this.selection][0]);
     return isNamed(e) ? e : null;
+  }
+
+  /** Puts arrowheads on the ends of the selected Bézier curves and splines, or takes them off with null. */
+  private setCurveHeads(ends: ArrowEnds | null): void {
+    for (const c of this.picked().beziers) {
+      if (c.type === "spline" && c.closed) continue;
+      if (ends) c.arrow = ends;
+      else delete c.arrow;
+    }
+    this.commit();
   }
 
   /** Sets which end of the selected arrow carries the head. */
@@ -5561,7 +5749,12 @@ export class App {
       if (!s) return;
       const v = parseNumber(input.value);
       const label = input.value.trim().replace(/^\$+|\$+$/g, "");
-      if (field === "sym-angle" && (s.type === "support" || s.type === "frame" || s.type === "centermark" || s.type === "load" || s.type === "moment" || s.type === "trace" || s.type === "etalon")) {
+      if (field === "sym-angle" && s.type === "note") {
+        if (!Number.isFinite(v)) { this.toast("Type the rotation as a number of degrees."); return this.touch(); }
+        const a = wrap(v * DEG + Math.PI) - Math.PI;
+        if (Math.abs(a) < 1e-9) delete s.angle;
+        else s.angle = a;
+      } else if (field === "sym-angle" && (s.type === "support" || s.type === "frame" || s.type === "centermark" || s.type === "load" || s.type === "moment" || s.type === "trace" || s.type === "etalon")) {
         if (!Number.isFinite(v)) { this.toast("Type the rotation as a number of degrees."); return this.touch(); }
         s.angle = v * DEG;
       } else if (s.type === "centermark" && field === "sym-scale") {
@@ -5726,6 +5919,21 @@ export class App {
     if (field === "curve-color") return this.setCurveColor(input.value);
 
     if (field === "sketch-color") return this.setSketchColor(input.value);
+    if (field === "sketch-name") {
+      const name = input.value.trim();
+      const part = activePart(this.drawing);
+      if (!name) { input.value = part.info.name; return; }
+      if (name === part.info.name) return;
+      part.info.name = name;
+      this.drawStrip();
+      return this.commit();
+    }
+    if (field === "move-to") {
+      const to = input.value;
+      input.value = "";
+      if (to) this.moveSelectionTo(to);
+      return;
+    }
     if (field === "sketch-weight") {
       const v = Math.max(WEIGHT_MIN, Math.min(WEIGHT_MAX, Number(input.value)));
       if (!Number.isFinite(v)) return;

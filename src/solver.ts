@@ -3,7 +3,7 @@
 import { GcsWrapper, SolveStatus, DebugMode, Algorithm, type SketchPrimitive } from "@salusoft89/planegcs";
 import {
   type Sketch, type Id, type Constraint, type Entity, type Link, type HalfPair,
-  ORIGIN, entity, point, isFixed, fixedPoints, arcRadius, unitScale,
+  ORIGIN, entity, point, isFixed, fixedPoints, arcRadius, unitScale, isDimension, sameValueGroups, measuredValue,
 } from "./model";
 import { type V, sub, dot, cross, norm, perp } from "./geom";
 
@@ -176,16 +176,45 @@ function linkPrims(sk: Sketch, c: Link, params: FreeParam[]): Prim[] {
 }
 
 /**
+ * What each dimension held equal to others is held to, in the geometry's own
+ * units: a number, or the name of an unknown they all share. Null for one
+ * that holds nothing. A dimension of fixed geometry in a group says what the
+ * value is; failing that, the group's first driving dimension does; a group
+ * of measures only shares an unknown. Every measure in a group holds its
+ * geometry to the value.
+ */
+type Targets = Map<Id, number | string | null>;
+function equalTargets(sk: Sketch, params: FreeParam[]): Targets {
+  const out: Targets = new Map();
+  for (const g of sameValueGroups(sk)) {
+    const fixed = g.find((d) => d.driven), driving = g.find((d) => !d.measure && !d.driven);
+    let target: number | string;
+    if (fixed) target = measuredValue(sk, fixed);
+    else if (driving) target = driving.type === "angle" ? driving.value : driving.value / unitScale(sk);
+    else {
+      target = `${g[0].id}:same`;
+      params.push({ name: target, value: measuredValue(sk, g[0]) });
+    }
+    for (const d of g) out.set(d.id, d.driven ? null : target);
+  }
+  return out;
+}
+
+/**
  * Translates one model constraint into zero or more planegcs constraints.
  * Unknowns it needs beyond the geometry are added to `params`.
  */
-function constraintPrims(sk: Sketch, c: Constraint, params: FreeParam[]): Prim[] {
+function constraintPrims(sk: Sketch, c: Constraint, params: FreeParam[], targets: Targets = new Map()): Prim[] {
   const id = c.id;
   // Lengths are dimensioned in the sketch's units; the geometry is in its own.
   const length = (v: number) => v / unitScale(sk);
-  // A measure reads the geometry and holds nothing.
-  if ((c.type === "distance" || c.type === "angle" || c.type === "radius") && (c.measure || c.driven)) return [];
+  const same = targets.get(id);
+  // A measure reads the geometry and holds nothing, unless it is held equal to something.
+  if (isDimension(c) && (c.measure || c.driven) && same === undefined) return [];
+  if (same === null) return [];
   switch (c.type) {
+    case "sameValue":
+      return []; // expressed through the values the dimensions are held to
     case "mirror":
     case "shift":
     case "turn":
@@ -244,19 +273,20 @@ function constraintPrims(sk: Sketch, c: Constraint, params: FreeParam[]): Prim[]
       return [{ id, type: "tangent_la", l_id: c.l, a_id: c.c }];
     }
     case "distance": {
-      if (c.toLine) return [{ id, type: "p2l_distance", p_id: c.a, l_id: c.b, distance: length(c.value) }];
+      const value = same ?? length(c.value);
+      if (c.toLine) return [{ id, type: "p2l_distance", p_id: c.a, l_id: c.b, distance: value }];
       if (c.mode === "aligned") {
-        return [{ id, type: "p2p_distance", p1_id: c.a, p2_id: c.b, distance: length(c.value) }];
+        return [{ id, type: "p2p_distance", p1_id: c.a, p2_id: c.b, distance: value }];
       }
-      // Horizontal and vertical distances are signed differences. The sign
-      // follows the current layout so the points keep their order.
+      // Horizontal and vertical distances are differences. The order of the
+      // points follows the current layout, so they keep it.
       const prop = c.mode === "horizontal" ? "x" : "y";
       const a = point(sk, c.a), b = point(sk, c.b);
-      const sign = b[prop] - a[prop] < 0 ? -1 : 1;
+      const [from, to] = b[prop] - a[prop] < 0 ? [c.b, c.a] : [c.a, c.b];
       return [{
         id, type: "difference",
-        param1: { o_id: c.a, prop }, param2: { o_id: c.b, prop },
-        difference: sign * length(c.value),
+        param1: { o_id: from, prop }, param2: { o_id: to, prop },
+        difference: value,
       }];
     }
     case "angle": {
@@ -266,13 +296,13 @@ function constraintPrims(sk: Sketch, c: Constraint, params: FreeParam[]): Prim[]
         id, type: "l2l_angle_pppp",
         l1p1_id: c.rev1 ? l1.p2 : l1.p1, l1p2_id: c.rev1 ? l1.p1 : l1.p2,
         l2p1_id: c.rev2 ? l2.p2 : l2.p1, l2p2_id: c.rev2 ? l2.p1 : l2.p2,
-        angle: c.value,
+        angle: same ?? c.value,
       }];
     }
     case "radius": {
       const k = kindOf(sk, c.target);
-      if (k === "circle") return [{ id, type: "circle_radius", c_id: c.target, radius: length(c.value) }];
-      return [{ id, type: "arc_radius", a_id: c.target, radius: length(c.value) }];
+      if (k === "circle") return [{ id, type: "circle_radius", c_id: c.target, radius: same ?? length(c.value) }];
+      return [{ id, type: "arc_radius", a_id: c.target, radius: same ?? length(c.value) }];
     }
   }
 }
@@ -331,7 +361,8 @@ export class SketchSolver {
     for (const p of dragPrims(sk, drags)) (p.type === "point" ? helpers : rest).push(p);
     const constraints: Prim[] = projectionLocks(sk);
     const params: FreeParam[] = [];
-    for (const c of sk.constraints) constraints.push(...constraintPrims(sk, c, params));
+    const targets = equalTargets(sk, params);
+    for (const c of sk.constraints) constraints.push(...constraintPrims(sk, c, params, targets));
     for (const p of params) g.push_sketch_param(p.name, p.value, false);
 
     // Helper points go right after the model points, ahead of every curve.
@@ -378,7 +409,8 @@ export class SketchSolver {
     const geometry = geometryPrims(sk).map((p) => (p.type === "point" && p.id === pin ? { ...p, fixed: true } : p));
     const constraints: Prim[] = projectionLocks(sk);
     const params: FreeParam[] = [];
-    for (const c of sk.constraints) constraints.push(...constraintPrims(sk, c, params));
+    const targets = equalTargets(sk, params);
+    for (const c of sk.constraints) constraints.push(...constraintPrims(sk, c, params, targets));
     for (const p of params) g.push_sketch_param(p.name, p.value, false);
     g.push_primitives_and_params([...geometry, ...constraints, ...extra]);
     const status = g.solve();

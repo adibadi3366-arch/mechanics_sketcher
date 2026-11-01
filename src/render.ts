@@ -24,7 +24,7 @@ export function imageUrl(src: string): string {
   return url;
 }
 import { type V, type Box, add, sub, mul, norm, perp, mid, polar, wrap, projectOnSegment, TWO_PI } from "./geom";
-import { type Prim, type StrokeStyle, type Outline, PAPER, dashOf, strokeWidth, arrowHeads, strokedEnds, strokedSweep, textBox } from "./prims";
+import { type Prim, type StrokeStyle, type Outline, PAPER, dashOf, strokeWidth, arrowHeads, strokedEnds, strokedSweep, strokedChain, textBox } from "./prims";
 import type { Overlaps } from "./regions";
 import { texEngine } from "./tex";
 import { ICONS } from "./icons";
@@ -107,7 +107,7 @@ const n2 = (v: number) => v.toFixed(2);
 const GLYPH_ICON: Record<string, string> = {
   coincident: "coincident", pointOn: "pointOn", midpoint: "midpoint", horizontal: "horizontal",
   vertical: "vertical", parallel: "parallel", perpendicular: "perpendicular", equal: "equal",
-  tangent: "tangent", fixed: "fixed", mirror: "mirror", shift: "shift", turn: "turn",
+  tangent: "tangent", fixed: "fixed", mirror: "mirror", shift: "shift", turn: "turn", sameValue: "equal",
 };
 
 /** Keeps a marker on the upper side of whatever it annotates. */
@@ -115,8 +115,12 @@ function upward(n: V): V {
   return n[1] > 1e-9 || (Math.abs(n[1]) <= 1e-9 && n[0] < 0) ? mul(n, -1) : n;
 }
 
-/** Lays out a marker for every constraint that `show` lets through. */
-export function layoutGlyphs(sk: Sketch, view: View, show: (c: Constraint) => boolean = () => true): Glyph[] {
+/**
+ * Lays out a marker for every constraint that `show` lets through.
+ * `labelAt` says where a dimension's number ends on screen: the marker of
+ * dimensions held equal goes just past it.
+ */
+export function layoutGlyphs(sk: Sketch, view: View, show: (c: Constraint) => boolean = () => true, labelAt: (id: Id) => V | null = () => null): Glyph[] {
   const out: Glyph[] = [];
   const used = new Map<string, number>();
   const S = (id: Id): V => { const p = point(sk, id); return toScreen(view, [p.x, p.y]); };
@@ -182,6 +186,12 @@ export function layoutGlyphs(sk: Sketch, view: View, show: (c: Constraint) => bo
       case "equal":
         atCurve(c, c.a);
         atCurve(c, c.b);
+        break;
+      case "sameValue":
+        for (const id of [c.a, c.b]) {
+          const at = labelAt(id);
+          if (at) place(c, at, [1, 0], [0, 1]);
+        }
         break;
       // One marker for a whole mirror image or pattern: on the mirror line, between the
       // original and its first copy, or at the point the copies go around.
@@ -363,7 +373,7 @@ export function drawPrims(s: PrimScene): string {
     } else if (p.k === "path") {
       out += `<polyline class="${cls}" points="${p.pts.map((q) => M(q).map(n2).join(",")).join(" ")}" ${sw}/>`;
     } else if (p.k === "bezier") {
-      const q = p.pts.map(M);
+      const q = strokedChain(p).map(M);
       let d = `M${n2(q[0][0])} ${n2(q[0][1])}`;
       for (let i = 1; i + 2 < q.length; i += 3) d += `C${n2(q[i][0])} ${n2(q[i][1])} ${n2(q[i + 1][0])} ${n2(q[i + 1][1])} ${n2(q[i + 2][0])} ${n2(q[i + 2][1])}`;
       out += `<path class="${cls}" d="${d}" ${sw}/>`;
@@ -371,7 +381,7 @@ export function drawPrims(s: PrimScene): string {
       const [a0, a1] = strokedSweep(p);
       out += `<path class="${cls}" d="${arcPath(view, [p.c[0] / mm, p.c[1] / mm], p.r / mm, a0, a1)}" ${sw}/>`;
     }
-    if (p.k === "line" || p.k === "arc") {
+    if (p.k === "line" || p.k === "arc" || p.k === "bezier") {
       for (const head of arrowHeads(p)) {
         out += `<polygon class="${cls} head" points="${head.map((q) => M(q).map(n2).join(",")).join(" ")}"${p.ink ? ` style="--ink:${p.ink}"` : ""}/>`;
       }
