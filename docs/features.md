@@ -39,7 +39,9 @@ Everything below is in the live app. New features are tried out first in the bet
 | Tool | Key | What it does |
 |---|---|---|
 | Construction | G | A switch at the start of the ribbon. While it's on, what you draw is construction geometry: pink while it can still move and dark purple once it's fully constrained. It's left out of the print and the export, but takes constraints and dimensions like anything else. |
-| Line | L | Click start and end; the next click continues from there. Nearly level or upright lines snap, and Alt switches that off. |
+| Line | L | Click start and end; the next line starts where it ended, until you end on a joint that was there already. Esc or a right-click stops the run and keeps the tool. Nearly level or upright lines snap, and Alt switches that off. |
+| Spline | | A smooth curve through the points you click. Click the last point again, middle-click, Enter or Esc to finish; click the first to close it. It can bound a fill, or carry arrowheads. |
+| Bézier curve | | Click its ends, then bend it; select it to drag its two control points. It can bound a fill, or carry arrowheads. |
 | Centre line | | A thin dash-dotted line that's part of the figure. It's good for mirroring about. |
 | Circle | C | Centre, then radius. |
 | Arc | A | Centre, start, sweep to the end. |
@@ -58,10 +60,10 @@ Everything below is in the live app. New features are tried out first in the bet
 ### Constraints
 | Constraint | Key | What it does |
 |---|---|---|
-| Dimension | D | Lengths, distances (aligned, horizontal or vertical), angles and radii. A text label such as `2a` can replace the number, and a dimension can be hidden yet still drive the geometry. |
+| Dimension | D | Lengths, distances (aligned, horizontal or vertical, between parallel lines, or from a point to a line), angles and radii. The first length dimension sets the scale; later ones are in its units. A text label such as `2a` can replace the number, and a dimension can be hidden yet still drive the geometry. |
 | Horizontal / Vertical | H / V | Applies to a line, or to two points. |
 | Parallel / Perpendicular | | Applies to two lines. |
-| Equal | E | Equal lengths, or equal radii. |
+| Equal | E | Equal lengths or equal radii; or two dimensions, or a dimension and a measure, held to one value. |
 | Coincident | O | Joins two points, or keeps a point on a curve. |
 | Midpoint | M | Keeps a point at the middle of a line. |
 | Tangent | T | A line and a circle or arc, or two circles or arcs. |
@@ -86,7 +88,7 @@ Conflicting constraints are flagged as they happen. The solver is FreeCAD's plan
 - **Axes:** a coordinate frame, pinned to a joint if wanted. Drag the tips to change length and click a label to rename it.
 - **Arrow and curved arrow:** for velocities, rotations and anything else with a name. They're constrained and dimensioned like lines.
 - **Datum point:** a coloured dot with a name.
-- **Note:** text with math between dollar signs (`$F_1 = 2a$`) and line breaks.
+- **Note:** text with math between dollar signs (`$F_1 = 2a$`) and line breaks. Turn it with the handle past its end, R, or the Rotation field.
 - **Centre mark:** centre lines for circles and arcs.
 - **Balloon:**
   - Numbers count up automatically.
@@ -96,7 +98,7 @@ Conflicting constraints are flagged as they happen. The solver is FreeCAD's plan
 - **Measure:** placed like a dimension and follows the geometry, with the value in brackets. It changes nothing and only you see it: it's left out of the print and the exports. Drag it like a dimension.
 - **Etalon:** a scale bar named with its unit, such as 1 m, or 10 kN for forces drawn at a scale. Drag its far end to set the length.
 - **Right angle:** the small square in the corner of two lines, with an optional dot. It's only drawn and holds nothing.
-- **Fill:** click inside a closed shape to colour it.
+- **Fill:** click inside a closed shape to colour it, hatch it as a cut, or both.
 - **Hatching:** strokes along a line, arc or circle, such as the ground under a support.
 
 Any text on the drawing (a dimension, an arrow's name, a note, a balloon) can be clicked and edited in place.
@@ -174,7 +176,7 @@ The live app shows the Support button for 3 seconds before an export finishes; t
 
 - **Install as an app:** use the install button in the browser's address bar. You get a desktop icon and its own window, and it works offline.
 - **Autosave:** the current sketch is kept in the browser.
-- **Save / Open (Ctrl+S / Ctrl+O):** a `.json` sketch file to keep or move between computers.
+- **Save / Open (Ctrl+S / Ctrl+O):** Save writes an SVG of the figure with the whole drawing inside it. Open takes those, exported SVG and TikZ files, older `.json` drawings, other SVGs (from CAD, to annotate) and PNG or JPG pictures (to trace over).
 - **Undo / Redo:** Ctrl+Z / Ctrl+Y.
 - **Built-in guide:** a welcome guide, plus a tip the first time each tool is used. Help brings them back.
 - **Report a bug or suggest something:** the button at top right writes an email for you to send.
@@ -204,7 +206,10 @@ The live app shows the Support button for 3 seconds before an export finishes; t
 
 ---
 
-## In the beta (not released yet)
+## Released on 7 November 2026
+
+What was tried out in the beta until then; all of it is in the live app.
+
 
 - **Relative dimensions (Creo-style):** the first length dimension only sets the scale and nothing moves; every later dimension is relative to it. Measures, etalons and every length shown in the side panel are in those units. The plan is in `docs/dimension-scale-plan.md`.
 - **Fitted export:** the whole figure, dimensions and text included, is fitted to the set width with 5 % margins; SVG and TikZ come out exactly that wide. The print preview shows the page with its margin.
@@ -227,6 +232,12 @@ The live app shows the Support button for 3 seconds before an export finishes; t
 - **Renaming sketches:** double-click any tab, or type the name in the side panel with nothing selected.
 - **Pictures to trace over:** open a PNG or JPG and it comes in, faint, in a sketch of its own: drag it into place, scale it by its corner, and trace over it in another sketch. Never exported.
 - **Annotating drawings from CAD:** open any other SVG and its lines, arcs, circles and curves come in as a sketch of their own, fixed in place, with their thicknesses, dashes and centre lines. Text, pictures and filled shapes are left out. Closed regions can be filled and hatched; dimensions of it are driven (they show what it measures), and the first one sets the scale.
+
+---
+
+## In the beta (not released yet)
+
+Nothing yet: new features show up here first.
 
 ---
 
