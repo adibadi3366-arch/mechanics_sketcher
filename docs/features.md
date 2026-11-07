@@ -238,6 +238,7 @@ What was tried out in the beta until then; all of it is in the live app.
 ## In the beta (not released yet)
 
 - **A landing page:** the address of the site opens a page that says what Mech Sketch is, with an animated example, the four steps, a TikZ export set by LaTeX, what it draws, and questions. The app moves to `app/` under it. Anyone who has used the app before, or opens it as an installed app, goes straight to the app; `?home` shows the page anyway.
+- **The beta behind a password:** the landing page has a line about the beta, for testers; the beta asks for a password once, then remembers it in that browser. It keeps the beta out of visitors' way, but cannot hide it: the site is static and the code is public.
 
 ---
 

@@ -32,6 +32,13 @@ again after it changes: with `npx vite --port 5174` running, `node
 scripts/landing-shots.cjs` draws the example truss at each step and saves the
 pictures, and `scripts/landing-tex.sh` sets its TikZ in a LaTeX page.
 
+The beta (`/beta/`) is for testers, behind a password: every beta page sends
+someone who has not given it to `/beta/unlock/`, and the browser remembers it
+once given. GitHub Pages cannot check a password and this repository is
+public, so it keeps the beta out of visitors' way but does not hide it. Only a
+hash of the password is in the source, as `BETA_HASH` in `vite.config.ts`: the
+SHA-256, in hex, of `mech-sketch-beta:` followed by the password.
+
 ## Using it
 
 The first time the page is opened it greets you with a short guide to the
