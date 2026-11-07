@@ -32,6 +32,13 @@ again after it changes: with `npx vite --port 5174` running, `node
 scripts/landing-shots.cjs` draws the example truss at each step and saves the
 pictures, and `scripts/landing-tex.sh` sets its TikZ in a LaTeX page.
 
+The demo recording comes from the app the same way: with the dev server
+running, `node scripts/demo-record.cjs <dir>` draws, constrains, dimensions,
+annotates and exports a truss in the real app (with a pointer drawn on the
+page), and `node scripts/demo-latex.cjs <dir>` sets the exported TikZ in a
+LaTeX document with pdflatex and records it going in. The two videos are
+joined into a GIF with ffmpeg.
+
 The beta (`/beta/`) is not linked from anywhere on the released site; only
 those given the address find it, and its pages ask search engines not to list
 them.
