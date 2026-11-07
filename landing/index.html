@@ -1,0 +1,232 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script>
+  // Someone who already uses the app, or opens it as an installed app, goes
+  // straight to it. ?home shows this page anyway.
+  (function () {
+    try {
+      if (/[?&]home(=|&|$)/.test(location.search)) return;
+      var installed = window.matchMedia("(display-mode: standalone)").matches || navigator.standalone === true;
+      if (installed || localStorage.getItem("{{autosave}}")) location.replace("app/" + location.hash);
+    } catch (e) { /* storage unavailable: stay here */ }
+  })();
+</script>
+<title>Mech Sketch – draw truss and beam figures, export TikZ and SVG</title>
+<meta name="description" content="Free browser tool for mechanics figures. Sketch trusses, beams and mechanisms like in CAD, add constraints and dimensions, and export TikZ or SVG for LaTeX.">
+<link rel="canonical" href="https://mech-sketch.org/">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="Mech Sketch">
+<meta property="og:title" content="Mech Sketch – draw truss and beam figures, export TikZ and SVG">
+<meta property="og:description" content="Free browser tool for mechanics figures. Sketch like in CAD, add constraints and dimensions, and export TikZ or SVG for LaTeX.">
+<meta property="og:url" content="https://mech-sketch.org/">
+<meta property="og:image" content="https://mech-sketch.org/preview.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:image:alt" content="A mechanics figure drawn in Mech Sketch: two discs joined by a link, with dimensions, labels and hatched ground">
+<meta name="twitter:card" content="summary_large_image">
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "WebApplication",
+  "name": "Mech Sketch",
+  "url": "https://mech-sketch.org/",
+  "description": "Constraint sketcher for truss, beam and mechanism figures, with TikZ and SVG export for LaTeX.",
+  "applicationCategory": "EducationalApplication",
+  "operatingSystem": "Any",
+  "browserRequirements": "Requires JavaScript",
+  "isAccessibleForFree": true,
+  "offers": { "@type": "Offer", "price": "0", "priceCurrency": "EUR" }
+}
+</script>
+<meta name="theme-color" content="#e7ebe5">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="icon-192.png">
+<link rel="preload" href="landing/fonts/barlow-600.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="preload" href="landing/fonts/lm-italic.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="stylesheet" href="landing/landing.css">
+</head>
+<body>
+<a class="skip" href="#main">Skip to the content</a>
+<header class="bar">
+  <a class="brand" href="./?home"><img src="icon.svg" alt="" width="26" height="26">Mech Sketch<!--beta--></a>
+  <a class="button small" href="app/">Open the app</a>
+</header>
+
+<main id="main">
+  <section class="hero" aria-labelledby="hero-title">
+    <div class="hero-text">
+      <h1 id="hero-title">Mechanics figures for LaTeX, drawn like a CAD&nbsp;sketch.</h1>
+      <p class="lead">Sketch a truss, a beam or a mechanism roughly. Constrain and dimension it until it is exact, add the supports and the loads, and export TikZ that LaTeX sets in your document’s own font.</p>
+      <p class="actions">
+        <a class="button" href="app/">Open Mech Sketch</a>
+        <a class="quiet" href="#tikz">See the TikZ it writes</a>
+      </p>
+      <p class="fine">Free, with no account. It runs in your browser and works offline once installed.</p>
+      <!--beta-note-->
+    </div>
+
+    <figure class="hero-figure">
+      <div class="sheet">
+        <svg id="truss" viewBox="-40 -80 186 118" role="img" aria-labelledby="truss-title">
+          <title id="truss-title">A truss drawn roughly, then constrained and dimensioned until it is exact, with a pin and a roller under it and loads F and 2F on top.</title>
+          <defs>
+            <marker id="tip" viewBox="0 0 10 6" refX="10" refY="3" markerWidth="5.4" markerHeight="3.3" orient="auto-start-reverse" markerUnits="userSpaceOnUse">
+              <path d="M0 0L10 3L0 6L2.2 3z" fill="currentColor"/>
+            </marker>
+            <marker id="bigtip" viewBox="0 0 10 6" refX="10" refY="3" markerWidth="7.6" markerHeight="4.6" orient="auto" markerUnits="userSpaceOnUse">
+              <path d="M0 0L10 3L0 6L2.2 3z" fill="currentColor"/>
+            </marker>
+          </defs>
+          <g class="dims" aria-hidden="true">
+            <path class="ext" d="M0 3V24M60 3V24M120 3V24M-3 0H-24M27 -42H-24"/>
+            <path class="dim" d="M1 21H59M61 21H119" marker-start="url(#tip)" marker-end="url(#tip)"/>
+            <path class="dim" d="M-21 -1V-41" marker-start="url(#tip)" marker-end="url(#tip)"/>
+            <text class="math" x="30" y="30">a</text>
+            <text class="math" x="90" y="30">a</text>
+            <text class="math" x="-28" y="-18.5">h</text>
+          </g>
+          <g class="supports" aria-hidden="true">
+            <path class="sym" d="M0 0L-5 8H5Z"/>
+            <path class="sym" d="M-8 8H8"/>
+            <path class="hatch" d="M-6.5 8l-2.6 3.6M-3 8l-2.6 3.6M0.5 8l-2.6 3.6M4 8l-2.6 3.6M7.5 8l-2.6 3.6"/>
+            <path class="sym" d="M120 0L115 7H125Z"/>
+            <circle class="sym" cx="117.4" cy="8.5" r="1.5"/>
+            <circle class="sym" cx="122.6" cy="8.5" r="1.5"/>
+            <path class="sym" d="M112 10H128"/>
+            <path class="hatch" d="M113.5 10l-2.6 3.6M117 10l-2.6 3.6M120.5 10l-2.6 3.6M124 10l-2.6 3.6M127.5 10l-2.6 3.6"/>
+          </g>
+          <g id="members" class="members free"></g>
+          <g id="glyphs" class="glyphs" aria-hidden="true"></g>
+          <g class="loads" aria-hidden="true">
+            <path class="load" d="M30 -60V-43.6" marker-end="url(#bigtip)"/>
+            <path class="load" d="M90 -70V-43.6" marker-end="url(#bigtip)"/>
+            <text class="math load-name" x="30" y="-63">F</text>
+            <text class="math load-name" x="90" y="-73">2F</text>
+          </g>
+          <g class="names" aria-hidden="true">
+            <text class="math" x="-9" y="-2">A</text>
+            <text class="math" x="23" y="-45">B</text>
+            <text class="math" x="65.5" y="8.5">C</text>
+            <text class="math" x="98" y="-45">D</text>
+            <text class="math" x="126" y="-2">E</text>
+          </g>
+        </svg>
+        <div class="titleblock" aria-live="polite"><span class="tb-count" id="tb-count">8</span><span class="tb-state" id="tb-state">degrees of freedom left</span></div>
+      </div>
+      <figcaption><button type="button" class="replay" id="replay" hidden>Draw it again</button></figcaption>
+    </figure>
+  </section>
+
+  <section class="steps" aria-labelledby="steps-title">
+    <h2 id="steps-title">From a rough sketch to an exact figure</h2>
+    <ol class="step-list">
+      <li>
+        <img src="landing/step-draw.webp" width="908" height="575" loading="lazy" alt="A truss drawn roughly in Mech Sketch, in blue, with 8 degrees of freedom left">
+        <h3>Draw roughly</h3>
+        <p>Click the joints with the Line tool, about where they belong. Blue means it can still move.</p>
+      </li>
+      <li>
+        <img src="landing/step-constrain.webp" width="908" height="575" loading="lazy" alt="The truss with level chords and equal sides, its constraints shown on the selected members">
+        <h3>Constrain</h3>
+        <p>Make lines horizontal, parallel, equal or tangent. The box in the corner counts what is still free.</p>
+      </li>
+      <li>
+        <img src="landing/step-dimension.webp" width="908" height="575" loading="lazy" alt="The truss fully constrained and black, with dimensions a, a and h, a pin and a roller, and loads F and 2F">
+        <h3>Dimension and annotate</h3>
+        <p>Type a length, or a name like <span class="math">a</span> or <span class="math">2a</span>, and the drawing follows. Then add supports, loads and labels.</p>
+      </li>
+      <li>
+        <img src="landing/step-export.webp" width="908" height="678" loading="lazy" alt="The print preview of the truss with the Export menu open: SVG, TikZ and Copy TikZ">
+        <h3>Export</h3>
+        <p>Save TikZ for LaTeX or SVG for slides and Word, at the width your page needs.</p>
+      </li>
+    </ol>
+  </section>
+
+  <section class="tikz" id="tikz" aria-labelledby="tikz-title">
+    <div class="tikz-text">
+      <h2 id="tikz-title">TikZ that LaTeX sets in your font</h2>
+      <p>The export is plain TikZ: lines, arcs and nodes you can read. LaTeX typesets the labels, so <span class="math">F</span> in the figure is the same <span class="math">F</span> as in your equations, at the size of your text.</p>
+      <p>The figure comes out exactly as wide as you set it, with the text at its print size, so what does not overlap on screen does not overlap on paper.</p>
+      <pre class="code" aria-label="Part of the TikZ file Mech Sketch wrote for the truss"><code>\begin{tikzpicture}[x=1mm, y=1mm, …]
+  \draw[member] (0,0) -- (26.76,0);
+  \draw[member] (0,0) -- (13.38,20.07);
+  \draw[member] (13.38,20.07) -- (40.14,20.07);
+  …
+  \draw[dim, tip-tip] (0,-10.7) -- (26.76,-10.7);
+  \node[label, anchor=north] at (13.38,-10.7) {$a$};
+\end{tikzpicture}</code></pre>
+      <p class="fine">It needs <code>\usepackage{tikz}</code> and <code>\usetikzlibrary{arrows.meta, bending}</code>; then <code>\input{truss.tex}</code> where the figure goes.</p>
+    </div>
+    <figure class="page">
+      <img src="landing/latex-page.svg" width="380" height="366" loading="lazy" alt="A page set by LaTeX: a truss problem, the truss figure from Mech Sketch with its caption, and the start of the solution, all in the same font">
+      <figcaption>The truss above, as LaTeX set it in a homework solution.</figcaption>
+    </figure>
+  </section>
+
+  <section class="draws" aria-labelledby="draws-title">
+    <h2 id="draws-title">What it draws</h2>
+    <ul class="draw-list">
+      <li>{{icon:pin}}<div><h3>Supports and loads</h3><p>Pins, rollers and clamps with hatched ground; forces, moments and distributed loads.</p></div></li>
+      <li>{{icon:diagram}}<div><h3>Internal force diagrams</h3><p>A plotted function laid along a beam, for shear force and bending moment diagrams.</p></div></li>
+      <li>{{icon:spring}}<div><h3>Springs and dampers</h3><p>Zigzag and coiled springs, dampers, torsion springs and centres of mass.</p></div></li>
+      <li>{{icon:curve}}<div><h3>Plots for pgfplots</h3><p>Functions and parametric curves, exported with their formulas still written as formulas.</p></div></li>
+      <li>{{icon:spline}}<div><h3>Curves and fills</h3><p>Arcs, splines and Bézier curves; closed regions filled with colour or hatched as a cut.</p></div></li>
+      <li>{{icon:project}}<div><h3>Sketches and CAD drawings</h3><p>Big drawings split into sketches; an SVG from your CAD tool opened to annotate it.</p></div></li>
+    </ul>
+  </section>
+
+  <section class="yours" aria-labelledby="yours-title">
+    <h2 id="yours-title" class="visually-hidden">Free, and your files stay yours</h2>
+    <dl class="facts">
+      <div><dt>No account</dt><dd>Open it and start drawing. There is nothing to sign up for.</dd></div>
+      <div><dt>Works offline</dt><dd>Install it from your browser’s address bar and it runs in its own window, without a network.</dd></div>
+      <div><dt>Your files stay with you</dt><dd>Your sketch is kept in your browser. Save writes an SVG with the whole drawing inside it, to open and change later.</dd></div>
+    </dl>
+  </section>
+
+  <section class="faq" aria-labelledby="faq-title">
+    <h2 id="faq-title">Questions</h2>
+    <details>
+      <summary>Can I change a figure after I have exported it?</summary>
+      <p>Yes. Exported SVG and TikZ files carry the drawing inside them. Open one in Mech Sketch and you get it back with its dimensions and constraints, ready to change.</p>
+    </details>
+    <details>
+      <summary>Do the dimensions have to be real sizes?</summary>
+      <p>No. The first length you dimension sets the scale, and you can name lengths instead of giving numbers: <span class="math">a</span>, <span class="math">2a</span>, <span class="math">h</span>. The figure is fitted to the width you set either way.</p>
+    </details>
+    <details>
+      <summary>Can I annotate a drawing from my CAD program?</summary>
+      <p>Export it from your CAD program as an SVG and open it in Mech Sketch. Its lines, arcs and curves come in fixed in place, in a sketch of their own, ready for dimensions, fills and labels.</p>
+    </details>
+    <details>
+      <summary>What does it cost?</summary>
+      <p>Nothing. If it saves you time, you can support it on Ko-fi.</p>
+    </details>
+  </section>
+
+  <section class="support" aria-labelledby="support-title">
+    <h2 id="support-title">Mech Sketch is free</h2>
+    <p>It is made for the figures in homework, reports and theses, and it stays free. If it saves you time, you can support it.</p>
+    <p class="actions">
+      <a class="button" href="https://ko-fi.com/mech_sketch" rel="noopener">Support it on Ko-fi</a>
+      <a class="quiet" href="mailto:bug.report@mech-sketch.org?subject=Mech%20Sketch">Report a bug or suggest something</a>
+    </p>
+  </section>
+</main>
+
+<footer class="foot">
+  <a class="brand" href="./?home"><img src="icon.svg" alt="" width="20" height="20">Mech Sketch</a>
+  <nav aria-label="More">
+    <a href="app/">Open the app</a>
+    <a href="https://ko-fi.com/mech_sketch" rel="noopener">Ko-fi</a>
+    <a href="mailto:bug.report@mech-sketch.org?subject=Mech%20Sketch">bug.report@mech-sketch.org</a>
+  </nav>
+</footer>
+<script src="landing/hero.js" defer></script>
+</body>
+</html>

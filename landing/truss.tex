@@ -1,0 +1,47 @@
+% Made with Mech Sketch. Needs \usepackage{tikz} and \usetikzlibrary{arrows.meta}.
+\begin{tikzpicture}[x=1mm, y=1mm, line cap=round, line join=round,
+  member/.style={line width=0.8pt},
+  dim/.style={line width=0.3pt},
+  symbol/.style={line width=0.4pt},
+  hatch/.style={line width=0.3pt},
+  arrow/.style={line width=0.6pt},
+  label/.style={inner sep=0.7mm},
+  tip/.tip={Stealth[length=1.8mm, width=1.1mm, inset=0.5mm]},
+  bigtip/.tip={Stealth[length=2.7mm, width=1.65mm, inset=0.76mm]}]
+  \useasboundingbox (-16.09,-16.99) rectangle (63.91,40.54);
+  \draw[member] (0,0) -- (26.76,0);
+  \draw[member] (26.76,0) -- (53.51,0);
+  \draw[member] (0,0) -- (13.38,20.07);
+  \draw[member] (13.38,20.07) -- (26.76,0);
+  \draw[member] (13.38,20.07) -- (40.14,20.07);
+  \draw[member] (26.76,0) -- (40.14,20.07);
+  \draw[member] (40.14,20.07) -- (53.51,0);
+  \draw[symbol, fill=white] (0,0) -- (-2.4,-4) -- (2.4,-4) -- cycle;
+  \draw[hatch] (-2.85,-4) -- (-3.91,-5.25) (-1.7,-4) -- (-2.76,-5.25) (-0.55,-4) -- (-1.61,-5.25) (0.6,-4) -- (-0.46,-5.25) (1.75,-4) -- (0.69,-5.25) (2.9,-4) -- (1.84,-5.25);
+  \draw[symbol] (-4,-4) -- (4,-4);
+  \draw[symbol, fill=white] (0,0) circle[radius=0.55];
+  \draw[symbol, fill=white] (53.51,0) -- (51.11,-3.4) -- (55.91,-3.4) -- cycle;
+  \draw[symbol, fill=white] (52.19,-4) circle[radius=0.6];
+  \draw[symbol, fill=white] (54.83,-4) circle[radius=0.6];
+  \draw[hatch] (50.66,-4.6) -- (49.6,-5.85) (51.81,-4.6) -- (50.75,-5.85) (52.96,-4.6) -- (51.9,-5.85) (54.11,-4.6) -- (53.05,-5.85) (55.26,-4.6) -- (54.2,-5.85) (56.41,-4.6) -- (55.35,-5.85);
+  \draw[symbol] (49.51,-4.6) -- (57.51,-4.6);
+  \draw[symbol, fill=white] (53.51,0) circle[radius=0.55];
+  \draw[arrow, draw={rgb,255:red,211;green,47;blue,47}, -bigtip] (13.38,26.76) -- (13.38,20.07);
+  \node[label, anchor=south, text={rgb,255:red,211;green,47;blue,47}] at (13.38,26.76) {$F$};
+  \draw[arrow, draw={rgb,255:red,211;green,47;blue,47}, -bigtip] (40.14,33.45) -- (40.14,20.07);
+  \node[label, anchor=south, text={rgb,255:red,211;green,47;blue,47}] at (40.14,33.45) {$2F$};
+  \node[label, anchor=west] at (-5.02,1) {$A$};
+  \node[label, anchor=west] at (8.36,23.08) {$B$};
+  \node[label, anchor=west] at (25.42,-5.02) {$C$};
+  \node[label, anchor=west] at (42.81,23.08) {$D$};
+  \node[label, anchor=west] at (56.52,1) {$E$};
+  \draw[dim] (0,-1) -- (0,-12.2) (26.76,-1) -- (26.76,-12.2);
+  \draw[dim, tip-tip] (0,-10.7) -- (26.76,-10.7);
+  \node[label, anchor=north] at (13.38,-10.7) {$a$};
+  \draw[dim] (26.76,-1) -- (26.76,-12.2) (53.51,-1) -- (53.51,-12.2);
+  \draw[dim, tip-tip] (26.76,-10.7) -- (53.51,-10.7);
+  \node[label, anchor=north] at (40.14,-10.7) {$a$};
+  \draw[dim] (-1,0) -- (-10.87,0) (12.38,20.07) -- (-10.87,20.07);
+  \draw[dim, tip-tip] (-9.37,0) -- (-9.37,20.07);
+  \node[label, anchor=east] at (-9.37,10.03) {$h$};
+\end{tikzpicture}%

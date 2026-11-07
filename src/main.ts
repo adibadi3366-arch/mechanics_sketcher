@@ -35,9 +35,10 @@ createSolver()
 
 // Served from a web address, the app registers a service worker so it can be
 // installed and keeps working offline. Opened as a file, there is none to register.
-// The beta has none of its own: it lives under the released app's address, and
-// registers that app's worker, which covers it too. The browser offers to install
-// the beta as an app of its own only once a worker covers it.
+// The worker sits at the top of the site, above the app (which is in app/) and the
+// landing page. The beta has none of its own: it lives under the released app's
+// address, in beta/, and registers that app's worker, which covers it too. The
+// browser offers to install the beta as an app of its own only once a worker covers it.
 if ("serviceWorker" in navigator && location.protocol.startsWith("http") && !import.meta.env.DEV) {
-  navigator.serviceWorker.register(BETA ? "../sw.js" : "./sw.js").catch((err) => console.warn("Offline support is unavailable", err));
+  navigator.serviceWorker.register(BETA ? "../../sw.js" : "../sw.js").catch((err) => console.warn("Offline support is unavailable", err));
 }

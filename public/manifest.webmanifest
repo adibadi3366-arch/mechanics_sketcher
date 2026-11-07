@@ -1,8 +1,9 @@
 {
+  "id": "/",
   "name": "Mech Sketch",
   "short_name": "Mech Sketch",
   "description": "Constraint sketcher for truss and beam figures",
-  "start_url": "./",
+  "start_url": "./app/",
   "scope": "./",
   "display": "standalone",
   "background_color": "#e7ebe5",

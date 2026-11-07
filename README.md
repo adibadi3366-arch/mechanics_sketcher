@@ -13,11 +13,24 @@ you time, you can [support it on Ko-fi](https://ko-fi.com/mech_sketch).
 npm install
 npm run dev      # development server
 npm test         # solver, model and primitive-list tests
-npm run build    # one self-contained dist/index.html
+npm run build    # the landing page, and the app as one self-contained file
 ```
 
-`dist/index.html` has the solver and fonts inlined, so it also opens straight
-from disk by double-click.
+The site has two pages. `dist/index.html` is the landing page, which says
+what Mech Sketch is (`landing/index.html`, with its styles, script, fonts and
+pictures in `public/landing/`). The app is `dist/app/index.html` (`app/index.html`
+in the source): it has the solver and fonts inlined, so it also opens straight
+from disk by double-click. In development the landing page is at `/` and the
+app at `/app/`.
+
+Someone who has used the app before (there is a saved sketch in the browser),
+or who opens it as an installed app, is sent from the landing page straight to
+the app; `/?home` shows the landing page anyway.
+
+The landing page's pictures come from the app itself, so they can be made
+again after it changes: with `npx vite --port 5174` running, `node
+scripts/landing-shots.cjs` draws the example truss at each step and saves the
+pictures, and `scripts/landing-tex.sh` sets its TikZ in a LaTeX page.
 
 ## Using it
 
@@ -472,13 +485,15 @@ set to the source "GitHub Actions" once.
 
 ## Search engines and shared links
 
-The `<head>` of `index.html` carries what a search engine and a shared link
+The `<head>` of `landing/index.html` carries what a search engine and a shared link
 show: the title, the description, the address the page is known by
 (`canonical`), the Open Graph tags and a short description in schema.org
 form. `public/preview.png` (1200 × 630) is the picture a chat or a post
 shows beside the link; put another file of that size in its place to change
 it. All of them name `https://mech-sketch.org/`, so a copy published
-somewhere else needs its own address there.
+somewhere else needs its own address there. The app's own page names
+`https://mech-sketch.org/app/`. `public/robots.txt` and `public/sitemap.xml`
+list both pages and keep search engines out of the beta.
 
 ## Status
 

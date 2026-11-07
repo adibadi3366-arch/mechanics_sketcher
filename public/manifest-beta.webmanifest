@@ -3,7 +3,7 @@
   "name": "Mech Sketch beta",
   "short_name": "Mech Sketch beta",
   "description": "The beta of Mech Sketch: new features being tried out",
-  "start_url": "./",
+  "start_url": "./app/",
   "scope": "./",
   "display": "standalone",
   "background_color": "#e7ebe5",

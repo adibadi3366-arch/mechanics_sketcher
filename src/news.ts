@@ -39,7 +39,7 @@ const BETA: News = {
     `<p class="lead">Sketches, Project and Move to sketch, relative dimensions, distances between parallel lines, equal dimensions, splines and Bézier curves, hatched fills, turning notes, line runs, SVG saves that reopen, CAD and picture import and the fitted export are now in the released Mech Sketch at mech-sketch.org. Thank you for trying them out.</p>` +
     `<p>Your sketch here stays in the beta, apart from the released app's. To carry it over, <b>Save</b> it here and <b>Open</b> the file there.</p>` +
     `<p class="muted">The next new features will show up here first.</p>`,
-  link: { href: "../", text: "Open the released app" },
+  link: { href: "../../", text: "Open the released app" },
   close: "Stay in the beta",
 };
 

@@ -237,7 +237,7 @@ What was tried out in the beta until then; all of it is in the live app.
 
 ## In the beta (not released yet)
 
-Nothing yet: new features show up here first.
+- **A landing page:** the address of the site opens a page that says what Mech Sketch is, with an animated example, the four steps, a TikZ export set by LaTeX, what it draws, and questions. The app moves to `app/` under it. Anyone who has used the app before, or opens it as an installed app, goes straight to the app; `?home` shows the page anyway.
 
 ---
 

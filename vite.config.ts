@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { defineConfig, type Plugin } from "vite";
 import { viteSingleFile } from "vite-plugin-singlefile";
+import { icon } from "./src/icons";
 
 const WASM = fileURLToPath(
   new URL("./node_modules/@salusoft89/planegcs/dist/planegcs_dist/planegcs.wasm", import.meta.url),
@@ -54,13 +55,58 @@ function betaPage(): Plugin {
   };
 }
 
-// Everything, including the solver and the fonts, is inlined into one
-// index.html so the build runs from a file:// URL as well as from a server.
+/**
+ * The landing page, at the top of the site: a plain page that says what Mech
+ * Sketch is, with the app itself one level down, in app/. It is written in
+ * landing/index.html; its pictures, styles and script are in public/landing.
+ * Here the app's icons are put in where it names them ({{icon:name}}), and the
+ * beta gets its own name, icon and saved-sketch key, and is kept out of search.
+ */
+function landingPage(): Plugin {
+  const page = () => {
+    const beta = process.env.VITE_CHANNEL === "beta";
+    let html = readFileSync(fileURLToPath(new URL("./landing/index.html", import.meta.url)), "utf8")
+      .replace(/\{\{icon:([a-z]+)\}\}/g, (_, name: string) => icon(name, 28))
+      .replace("{{autosave}}", beta ? "mech-sketch-beta.autosave" : "mech-sketch.autosave");
+    if (beta) {
+      html = html
+        .replace("<head>", `<head>\n<meta name="robots" content="noindex">`)
+        .replace("<title>Mech Sketch –", "<title>Mech Sketch beta –")
+        .replace('href="icon.svg"', 'href="icon-beta.svg"')
+        .replace('href="manifest.webmanifest"', 'href="manifest-beta.webmanifest"')
+        .replace('href="icon-192.png"', 'href="icon-beta-192.png"')
+        .replace("<!--beta-->", `<span class="beta-badge" title="New features are tried out here first">beta</span>`)
+        .replace("<!--beta-note-->", `<p class="beta-note">This is the beta, where new features are tried out first. Its sketches are kept apart from the released app at <a href="../">mech-sketch.org</a>.</p>`);
+    }
+    return html;
+  };
+  return {
+    name: "landing-page",
+    configureServer(server) {
+      server.middlewares.use((req, res, next) => {
+        const path = (req.url ?? "").split("?")[0];
+        if (path !== "/" && path !== "/index.html") return next();
+        res.setHeader("Content-Type", "text/html; charset=utf-8");
+        res.end(page());
+      });
+    },
+    generateBundle() {
+      this.emitFile({ type: "asset", fileName: "index.html", source: page() });
+    },
+  };
+}
+
+// The app, with the solver and the fonts, is inlined into one app/index.html,
+// so it runs from a file:// URL as well as from a server.
 export default defineConfig({
   base: "./",
-  plugins: [planegcsWasm(), betaPage(), viteSingleFile()],
+  plugins: [planegcsWasm(), betaPage(), viteSingleFile(), landingPage()],
   // When this copy was built, shown in the app so it is easy to tell which version is open.
   define: { __BUILD_TIME__: JSON.stringify(new Date().toISOString()) },
-  build: { target: "es2022", assetsInlineLimit: 100_000_000 },
+  build: {
+    target: "es2022",
+    assetsInlineLimit: 100_000_000,
+    rollupOptions: { input: fileURLToPath(new URL("./app/index.html", import.meta.url)) },
+  },
   test: { environment: "node" },
 });
