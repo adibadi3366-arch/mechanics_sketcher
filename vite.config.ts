@@ -33,24 +33,6 @@ function planegcsWasm(): Plugin {
 }
 
 /**
- * The beta is for testers, behind a password. GitHub Pages cannot check one,
- * and the repository is public, so this only keeps the beta out of visitors'
- * way: each beta page sends anyone who has not given the password to the
- * page that asks for it (unlock/), which keeps a hash of it in the browser
- * once it is given. Only the hash is here. To change the password, put the
- * SHA-256 of "mech-sketch-beta:" followed by the new one here, in hex.
- */
-const BETA_HASH = "eff2622b84fc2123a512a1a757f45ee2fe4bd80e2b88b9021e3a9c14fd550836";
-const BETA_KEY_NAME = "mech-sketch-beta.key";
-/** The script at the top of a beta page that sends someone without the password to `unlock`. */
-const betaGate = (unlock: string) => `<script>
-  // The beta is for testers: without the password, to the page that asks for it.
-  try {
-    if (localStorage.getItem("${BETA_KEY_NAME}") !== "${BETA_HASH}") location.replace("${unlock}?next=" + encodeURIComponent(location.pathname + location.search + location.hash));
-  } catch (e) { /* storage unavailable: let them through */ }
-</script>`;
-
-/**
  * The beta is for trying things out: search engines are asked to leave it
  * alone. Its icon has a little b in the corner, so its tab is told apart from
  * the released app's, and it has a manifest of its own, so it installs as an
@@ -64,7 +46,7 @@ function betaPage(): Plugin {
       handler: (html) =>
         process.env.VITE_CHANNEL === "beta"
           ? html
-            .replace("<head>", `<head>\n<meta name="robots" content="noindex">\n${betaGate("../unlock/")}`)
+            .replace("<head>", `<head>\n<meta name="robots" content="noindex">`)
             .replace(/(<link rel="icon" href="[^"]*?)icon\.svg"/, `$1icon-beta.svg"`)
             .replace(/(<link rel="manifest" href="[^"]*?)manifest\.webmanifest"/, `$1manifest-beta.webmanifest"`)
             .replace(/(<link rel="apple-touch-icon" href="[^"]*?)icon-192\.png"/, `$1icon-beta-192.png"`)
@@ -85,12 +67,10 @@ function landingPage(): Plugin {
     const beta = process.env.VITE_CHANNEL === "beta";
     let html = readFileSync(fileURLToPath(new URL("./landing/index.html", import.meta.url)), "utf8")
       .replace(/\{\{icon:([a-z]+)\}\}/g, (_, name: string) => icon(name, 28))
-      .replace("{{autosave}}", beta ? "mech-sketch-beta.autosave" : "mech-sketch.autosave")
-      // The section about the beta: on the released site it leads to the beta, in the beta to its app.
-      .replace("{{beta-link}}", beta ? "app/" : "beta/");
+      .replace("{{autosave}}", beta ? "mech-sketch-beta.autosave" : "mech-sketch.autosave");
     if (beta) {
       html = html
-        .replace("<head>", `<head>\n<meta name="robots" content="noindex">\n${betaGate("unlock/")}`)
+        .replace("<head>", `<head>\n<meta name="robots" content="noindex">`)
         .replace("<title>Mech Sketch –", "<title>Mech Sketch beta –")
         .replace('href="icon.svg"', 'href="icon-beta.svg"')
         .replace('href="manifest.webmanifest"', 'href="manifest-beta.webmanifest"')
@@ -98,29 +78,21 @@ function landingPage(): Plugin {
         .replace("<!--beta-->", `<span class="beta-badge" title="New features are tried out here first">beta</span>`)
         .replace("<!--beta-note-->", `<p class="beta-note">This is the beta, where new features are tried out first. Its sketches are kept apart from the released app at <a href="../">mech-sketch.org</a>.</p>`);
     }
-    return html;
+    // The released site does not name the beta, not even in a comment.
+    return html.replace("<!--beta-->", "").replace("<!--beta-note-->", "");
   };
-  /** The beta's password page; none in the released site. */
-  const unlock = () =>
-    readFileSync(fileURLToPath(new URL("./landing/unlock.html", import.meta.url)), "utf8")
-      .replace("{{beta-key-name}}", BETA_KEY_NAME)
-      .replace("{{beta-hash}}", BETA_HASH);
-  const beta = () => process.env.VITE_CHANNEL === "beta";
   return {
     name: "landing-page",
     configureServer(server) {
       server.middlewares.use((req, res, next) => {
         const path = (req.url ?? "").split("?")[0];
-        const html = path === "/" || path === "/index.html" ? page()
-          : beta() && (path === "/unlock/" || path === "/unlock/index.html") ? unlock() : null;
-        if (html === null) return next();
+        if (path !== "/" && path !== "/index.html") return next();
         res.setHeader("Content-Type", "text/html; charset=utf-8");
-        res.end(html);
+        res.end(page());
       });
     },
     generateBundle() {
       this.emitFile({ type: "asset", fileName: "index.html", source: page() });
-      if (beta()) this.emitFile({ type: "asset", fileName: "unlock/index.html", source: unlock() });
     },
   };
 }

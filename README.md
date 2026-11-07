@@ -32,12 +32,9 @@ again after it changes: with `npx vite --port 5174` running, `node
 scripts/landing-shots.cjs` draws the example truss at each step and saves the
 pictures, and `scripts/landing-tex.sh` sets its TikZ in a LaTeX page.
 
-The beta (`/beta/`) is for testers, behind a password: every beta page sends
-someone who has not given it to `/beta/unlock/`, and the browser remembers it
-once given. GitHub Pages cannot check a password and this repository is
-public, so it keeps the beta out of visitors' way but does not hide it. Only a
-hash of the password is in the source, as `BETA_HASH` in `vite.config.ts`: the
-SHA-256, in hex, of `mech-sketch-beta:` followed by the password.
+The beta (`/beta/`) is not linked from anywhere on the released site; only
+those given the address find it, and its pages ask search engines not to list
+them.
 
 ## Using it
 
@@ -500,7 +497,7 @@ shows beside the link; put another file of that size in its place to change
 it. All of them name `https://mech-sketch.org/`, so a copy published
 somewhere else needs its own address there. The app's own page names
 `https://mech-sketch.org/app/`. `public/robots.txt` and `public/sitemap.xml`
-list both pages and keep search engines out of the beta.
+list both pages; the beta is in neither, so as not to name it.
 
 ## Status
 

@@ -188,6 +188,7 @@ main > section { max-width: 1240px; margin: 0 auto; padding: 0 var(--gutter); }
 .support .actions { margin-top: 24px; }
 
 .foot { border-top: 1px solid var(--rule); padding-top: 22px; padding-bottom: 28px; flex-wrap: wrap; }
+.disclaimer { flex: 1 1 100%; padding-right: max(0px, calc(100% - 46rem)); margin-bottom: 14px; color: var(--muted); font-size: 0.95rem; }
 .foot .brand { font-size: 1rem; }
 .foot nav { display: flex; flex-wrap: wrap; gap: 8px 22px; font-size: 0.95rem; }
 
@@ -209,30 +210,3 @@ main > section { max-width: 1240px; margin: 0 auto; padding: 0 var(--gutter); }
   html { scroll-behavior: auto; }
   .members line, .members circle, .dims, .supports, .loads, .names, .glyph { transition: none; }
 }
-
-/* The beta: a line about it on the landing page, and the page that asks for its password. */
-.next {
-  display: flex; align-items: center; justify-content: space-between; gap: 18px 40px; flex-wrap: wrap;
-  padding-top: clamp(40px, 6vw, 72px) !important; padding-bottom: clamp(40px, 6vw, 72px) !important;
-  border-top: 1px solid var(--rule);
-}
-.next h2 { font-size: clamp(1.35rem, 1.1rem + 0.9vw, 1.75rem); }
-.next p { margin-top: 10px; max-width: var(--measure); color: #36423b; }
-.button.outline { background: transparent; color: var(--ink); border: 1.5px solid var(--ink); }
-.button.outline:hover { background: var(--ink); color: var(--paper); }
-
-.unlock { max-width: 34rem; margin: 0 auto; padding: clamp(40px, 10vh, 120px) var(--gutter) 80px; }
-.unlock h1 { font-size: clamp(1.9rem, 1.4rem + 2vw, 2.6rem); letter-spacing: -0.015em; }
-.unlock > p { margin-top: 14px; }
-.unlock form { margin-top: 28px; }
-.unlock label { display: block; font-weight: 500; margin-bottom: 8px; }
-.unlock-row { display: flex; gap: 10px; flex-wrap: wrap; }
-.unlock input {
-  flex: 1 1 14rem; min-height: 46px; padding: 0 14px;
-  font: 400 1.0625rem "Barlow", sans-serif; color: var(--ink);
-  background: var(--paper); border: 1.5px solid var(--rule); border-radius: 6px;
-}
-.unlock input:focus-visible { outline: 2px solid var(--free); outline-offset: 1px; border-color: var(--ink); }
-.unlock input[aria-invalid="true"] { border-color: #c3242d; }
-.unlock-error { margin-top: 10px; color: #c3242d; font-weight: 500; }
-.unlock .fine { margin-top: 34px; }

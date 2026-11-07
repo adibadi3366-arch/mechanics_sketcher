@@ -1,4 +1,3 @@
 User-agent: *
 Allow: /
-Disallow: /beta/
 Sitemap: https://mech-sketch.org/sitemap.xml
