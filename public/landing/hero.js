@@ -145,3 +145,20 @@
     (document.fonts ? document.fonts.ready : Promise.resolve()).then(() => setTimeout(draw, 200));
   }
 })();
+
+// The demo video plays, muted, while it is on screen, and waits otherwise.
+// With reduced motion it waits for its play button.
+(function () {
+  const video = document.getElementById("demo");
+  if (!video) return;
+  if (window.matchMedia("(prefers-reduced-motion: reduce)").matches || !("IntersectionObserver" in window)) return;
+  let paused = false;
+  video.addEventListener("pause", () => { if (!video.dataset.auto) paused = true; delete video.dataset.auto; });
+  video.addEventListener("play", () => { paused = false; });
+  new IntersectionObserver((entries) => {
+    for (const e of entries) {
+      if (e.isIntersecting && !paused) video.play().catch(() => {});
+      else if (!e.isIntersecting && !video.paused) { video.dataset.auto = "1"; video.pause(); }
+    }
+  }, { threshold: 0.35 }).observe(video);
+})();

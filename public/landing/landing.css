@@ -129,6 +129,25 @@ main > section { max-width: 1240px; margin: 0 auto; padding: 0 var(--gutter); }
 .replay { font: 500 0.95rem "Barlow", sans-serif; color: var(--free); background: none; border: 0; padding: 6px 2px; cursor: pointer; text-decoration: underline; text-underline-offset: 0.18em; }
 .replay:hover { color: #123f96; }
 
+/* How it is made: said plainly, where everyone sees it. */
+.notice {
+  display: flex; gap: 12px; align-items: flex-start; margin-top: 26px; max-width: var(--measure);
+  padding: 14px 16px; border: 1.5px solid #e2570a; border-radius: 8px; background: #fbe6d8; color: #4a2410;
+}
+.notice svg { flex: none; color: #c2470a; margin-top: 1px; }
+.notice p { font-size: 0.98rem; line-height: 1.5; }
+.notice strong { font-weight: 600; color: #17201b; }
+.notice a { color: #8a3208; }
+
+/* The demo: the whole workflow, recorded in the app. */
+.demo { padding-bottom: clamp(56px, 8vw, 104px) !important; }
+.demo > p { margin-top: 12px; max-width: 40rem; color: var(--muted); }
+.demo-video { margin: 26px 0 0; }
+.demo-video video {
+  display: block; width: 100%; height: auto; aspect-ratio: 1280 / 760; background: var(--board-lo);
+  border: 1px solid var(--rule); border-radius: 8px; box-shadow: 0 18px 40px -28px rgba(23, 32, 27, 0.45);
+}
+
 /* The workflow: four steps, in order. */
 .steps { padding-bottom: clamp(56px, 8vw, 112px) !important; }
 .steps h2 { max-width: 20ch; }

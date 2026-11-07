@@ -238,7 +238,8 @@ What was tried out in the beta until then; all of it is in the live app.
 ## In the beta (not released yet)
 
 - **A landing page:** the address of the site opens a page that says what Mech Sketch is, with an animated example, the four steps, a TikZ export set by LaTeX, what it draws, and questions. The app moves to `app/` under it. Anyone who has used the app before, or opens it as an installed app, goes straight to the app; `?home` shows the page anyway.
-- **A disclaimer:** the landing page says, in its footer and among its questions, that Mech Sketch is mostly vibe-coded, and asks people to check figures before handing them in.
+- **A disclaimer:** a notice in the landing page's opening says plainly that Mech Sketch is mostly vibe-coded and asks people to check figures before handing them in; the footer and the questions say it again.
+- **A demo video** on the landing page, under the opening: a truss drawn, constrained, dimensioned, annotated and exported in the app, then set by LaTeX. It plays muted while on screen.
 
 ---
 

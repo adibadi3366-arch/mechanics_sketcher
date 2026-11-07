@@ -66,6 +66,10 @@
         <a class="quiet" href="#tikz">See the TikZ it writes</a>
       </p>
       <p class="fine">Free, with no account. It runs in your browser and works offline once installed.</p>
+      <aside class="notice" aria-label="How Mech Sketch is made">
+        <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path d="M12 3.2L22 20.5H2z" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linejoin="round"/><path d="M12 9.5v5.2" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><circle cx="12" cy="17.6" r="1.25" fill="currentColor"/></svg>
+        <p><strong>Mostly vibe-coded.</strong> Most of Mech Sketch’s code was written by an AI coding assistant, then tried out and corrected by hand. Check a figure before you hand it in, and if something looks wrong, <a href="mailto:bug.report@mech-sketch.org?subject=Mech%20Sketch">write about it</a>.</p>
+      </aside>
       <!--beta-note-->
     </div>
 
@@ -118,6 +122,17 @@
         <div class="titleblock" aria-live="polite"><span class="tb-count" id="tb-count">8</span><span class="tb-state" id="tb-state">degrees of freedom left</span></div>
       </div>
       <figcaption><button type="button" class="replay" id="replay" hidden>Draw it again</button></figcaption>
+    </figure>
+  </section>
+
+  <section class="demo" aria-labelledby="demo-title">
+    <h2 id="demo-title">A figure from start to finish</h2>
+    <p>A truss drawn roughly, constrained, dimensioned, given its supports and loads, exported, and set by LaTeX in a homework solution. Recorded in the app, at one and a half times the speed.</p>
+    <figure class="demo-video">
+      <video id="demo" poster="landing/demo-poster.webp" width="1280" height="760" muted loop playsinline preload="metadata" controls aria-label="Mech Sketch drawing a truss and exporting it to LaTeX, about 50 seconds, without sound">
+        <source src="landing/demo.webm" type="video/webm">
+        <source src="landing/demo.mp4" type="video/mp4">
+      </video>
     </figure>
   </section>
 
@@ -224,7 +239,7 @@
 </main>
 
 <footer class="foot">
-  <p class="disclaimer">Mech Sketch is mostly vibe-coded: most of its code was written by an AI coding assistant, then tried out and corrected by hand. Check a figure before you hand it in, and if something looks wrong, <a href="mailto:bug.report@mech-sketch.org?subject=Mech%20Sketch">write about it</a>.</p>
+  <p class="disclaimer">Mostly vibe-coded: written largely by an AI coding assistant. Check your figures.</p>
   <a class="brand" href="./?home"><img src="icon.svg" alt="" width="20" height="20">Mech Sketch</a>
   <nav aria-label="More">
     <a href="app/">Open the app</a>

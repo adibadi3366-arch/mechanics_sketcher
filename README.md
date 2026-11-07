@@ -36,8 +36,10 @@ The demo recording comes from the app the same way: with the dev server
 running, `node scripts/demo-record.cjs <dir>` draws, constrains, dimensions,
 annotates and exports a truss in the real app (with a pointer drawn on the
 page), and `node scripts/demo-latex.cjs <dir>` sets the exported TikZ in a
-LaTeX document with pdflatex and records it going in. The two videos are
-joined into a GIF with ffmpeg.
+LaTeX document with pdflatex and records it going in.
+`scripts/demo-encode.sh <dir>` joins the two into the landing page's video
+(`public/landing/demo.webm` and `demo.mp4`, with a poster) and a GIF for
+sharing.
 
 The beta (`/beta/`) is not linked from anywhere on the released site; only
 those given the address find it, and its pages ask search engines not to list
