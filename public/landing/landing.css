@@ -131,13 +131,11 @@ main > section { max-width: 1240px; margin: 0 auto; padding: 0 var(--gutter); }
 
 /* How it is made: said plainly, where everyone sees it. */
 .notice {
-  display: flex; gap: 12px; align-items: flex-start; margin-top: 26px; max-width: var(--measure);
-  padding: 14px 16px; border: 1.5px solid #e2570a; border-radius: 8px; background: #fbe6d8; color: #4a2410;
+  display: flex; width: fit-content; gap: 10px; align-items: center; margin-top: 24px;
+  padding: 10px 16px 10px 14px; border: 1.5px solid #e2570a; border-radius: 8px; background: #fbe6d8;
 }
-.notice svg { flex: none; color: #c2470a; margin-top: 1px; }
-.notice p { font-size: 0.98rem; line-height: 1.5; }
-.notice strong { font-weight: 600; color: #17201b; }
-.notice a { color: #8a3208; }
+.notice svg { flex: none; color: #c2470a; }
+.notice p { font-size: 1.0625rem; font-weight: 600; line-height: 1.3; color: #17201b; }
 
 /* The demo: the whole workflow, recorded in the app. */
 .demo { padding-bottom: clamp(56px, 8vw, 104px) !important; }
