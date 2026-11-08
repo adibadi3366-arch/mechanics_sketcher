@@ -247,7 +247,23 @@ The site's address now opens a home page; the app itself is at `app/`.
 
 ## In the beta (not released yet)
 
-Nothing yet: new features show up here first.
+### Wiring guides (`beta/circuit/`)
+
+A page of its own for showing how a drone, or any electronics project, is wired up, in the style of an assembly manual: boards as simplified vector drawings, a coloured tag with the name of every pin, and the wires between two ports in bundles. It is the same app, opened on its **Wiring** workspace; the sketcher is used to draw parts. Its guide is kept apart from the sketcher's drawing.
+
+- **Starter library:** MicoAir H743 v2 flight controller (at the most detailed level: SD slot, OSD and IMUs, passives, vias, port names and the ESC pin letters on the silkscreen), 4-in-1 ESC, brushless motor, M10 GPS with compass, ELRS receiver, 5.8 GHz video transmitter, FPV camera, buzzer with LED, Li-Po battery, servo and an I²C sensor board. A part taken from it is saved with the guide.
+- **Example:** a whole quadcopter on the H743, laid out and wired (40 wires), from the empty page or the panel.
+- **Place, move, turn (R), mirror (F), duplicate (Ctrl+D), delete.** Parts snap to a half-millimetre grid; a bundle that nearly runs straight is pulled straight while a part is dragged. Shift-drag selects several.
+- **Wire (W):** a tag, then the tag it goes to. **Plug in (B):** a tag of one port, then a tag of another: every pin is wired to the one it goes with (Tx to Rx, GND to GND, power by voltage, the rest by name).
+- **Tags:** coloured by what the pin does, read from its name (GND black, power red, Tx green, Rx yellow, SCL grey, SDA blue, motor outputs light blue, current purple, video yellow, RC orange, LED and buzzer). Pins with nothing wired get outlined tags, or none.
+- **Bundles:** the wires between two ports run together and turn on one centre, keeping their spacing; where the far pins are in another order, the wires swing over just before the end. They find their own way round parts and follow them when they move; drag a middle stretch to lay one by hand, **Re-lay** to go back. **Rounded or square corners**, both with a darker edge round each wire (it can be turned off). Solder pads (battery leads, motor phases) take their wires right onto the pad, with a drop of solder, and thicker wire where the part says so.
+- **Wires:** a colour of their own (or that of their first pin) and a note written along them.
+- **Connection lists (CSV):** `from_device,from_port,from_pin,to_device,to_port,to_pin,colour,label`. Import wires a whole guide and places the parts it names from the library; the port may be left empty where it is clear. Export writes the guide's wires. Commas, semicolons or tabs; other usual column names are understood.
+- **Checks:** wires to pins that are not there, ground wired to power, Tx to Tx and two voltages wired together are listed in the panel.
+- **Your own parts:** **Draw part** opens the sketcher on a blank sketch with a banner for the part's name; draw it, dimension it in mm, and put **Wire pins** on it from the Annotate tab, each with a name, a connector, a direction and whether it is plugged in or soldered on. Done puts it in the library; double-click a placed one to change its drawing everywhere. **Import part** reads a component file (JSON): shapes (rect, circle, line, polygon, arc, text, and ready-made connector, chip, hole, pad, passive, LED and button) and ports. A part from the library can be saved as one.
+- **From a photo:** the panel copies or saves the instructions for an AI chat to turn a photo of a board into a component file (`docs/pcb-photo-to-component.md`).
+- **Captions** under each part (draggable, more than one line) and free **text** for titles and notes.
+- **Export:** SVG, or TikZ at the size on paper (×2 by default, set under Look), with the drawing inside so Open brings the guide back. Save writes the guide as an SVG.
 
 ---
 

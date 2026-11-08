@@ -1,6 +1,7 @@
 // The sketch document: geometry, constraints, dimensions and symbols.
 // Coordinates are y-up, in unitless model units.
 
+import { type Circuit, readCircuit } from "./circuit/model";
 import { type Box, emptyBox, grow, boxIsEmpty, inSweep, polar, TWO_PI } from "./geom";
 
 export type Id = string;
@@ -423,6 +424,18 @@ export interface Datum {
   dy: number;
   /** Drawn as the mark of a centre of mass: a circle in quarters, two of them filled. Unset: a dot. */
   mass?: boolean;
+  /**
+   * A connection point of a part drawn for a wiring guide: wires are attached
+   * here. Its name is the label. It is left out of the figure: the guide
+   * shows it as a tag.
+   */
+  pin?: true;
+  /** The connector the pin is on, by name; pins of one connector are wired as a bundle. Unset: a connector of its own. */
+  port?: string;
+  /** Which way its wires leave the part: left, right, up or down. Unset: towards the nearest edge of the part. */
+  dir?: "l" | "r" | "u" | "d";
+  /** Its wires are soldered onto it, rather than plugged in beside it: they run right onto the pin. */
+  pad?: true;
 }
 /** Text placed freely on the figure. */
 export interface Note {
@@ -692,6 +705,11 @@ export interface Sketch {
   lineColor?: string;
   /** Thickness of this sketch's lines, circles and arcs that have none of their own, in points. Unset: the standard. */
   lineWeight?: number;
+  /**
+   * The wiring guide kept with the drawing: the parts drawn for it, where
+   * they are placed and how they are wired. Unset: there is none.
+   */
+  circuit?: Circuit;
 }
 
 /** One sketch of a drawing, as listed in the strip at the bottom. */
@@ -1335,6 +1353,7 @@ export function deserialize(text: string): Sketch {
     ...(lengthScale !== undefined ? { lengthScale } : {}),
     ...(Array.isArray(raw.sketches) && raw.sketches.length && raw.sketches.every((i) => !!i && typeof i.id === "string" && typeof i.name === "string")
       ? { sketches: raw.sketches, ...(typeof raw.active === "string" ? { active: raw.active } : {}) } : {}),
+    ...(raw.circuit !== undefined ? (() => { const c = readCircuit(raw.circuit, (x) => deserialize(JSON.stringify(x))); return c ? { circuit: c } : {}; })() : {}),
   };
 }
 

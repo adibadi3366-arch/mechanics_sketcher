@@ -770,3 +770,91 @@ input.tex-shown:not(:focus) {
 image.picture { pointer-events: none; }
 .picture-frame { fill: none; stroke: #f08a4b; stroke-width: 1.2; pointer-events: none; }
 .picture-frame.sel { stroke: var(--sel); stroke-width: 1.6; stroke-dasharray: 6 4; }
+
+/* ---- the Wiring workspace -------------------------------------------------------- */
+
+/* The guide on its sheet of paper, the board round it; one workspace is on screen at a time. */
+#circuit-canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: none; touch-action: none; user-select: none; background: var(--board); }
+#app[data-workspace="circuit"] #circuit-canvas { display: block; }
+#app[data-workspace="circuit"] #canvas,
+#app[data-workspace="circuit"] #empty,
+#app[data-workspace="circuit"] #titleblock,
+#app[data-workspace="circuit"] #dim-editor,
+#app[data-workspace="circuit"] [data-act="preview"],
+#app[data-workspace="circuit"] [data-act="origin"] { display: none; }
+#app:not([data-workspace="circuit"]) #circuit-empty { display: none; }
+#app[data-workspace="circuit"] .sheets { visibility: hidden; }
+#circuit-empty { top: 40%; max-width: 460px; }
+#circuit-empty p + p { margin-top: 12px; }
+#circuit-empty button { pointer-events: auto; }
+#circuit-canvas[data-over="ew"] { cursor: ew-resize; }
+#circuit-canvas[data-over="ns"] { cursor: ns-resize; }
+#circuit-canvas[data-over="grab"] { cursor: grabbing; }
+#circuit-canvas[data-over="move"] { cursor: move; }
+#circuit-canvas[data-over="pointer"] { cursor: pointer; }
+#circuit-canvas[data-over="place"] { cursor: crosshair; }
+#circuit-canvas[data-over="pan"] { cursor: grab; }
+.cw-page { fill: #ffffff; filter: drop-shadow(0 1px 3px rgba(23, 32, 27, 0.22)); }
+.cw-size { font-size: 12px; fill: var(--ink-2); }
+.cw-hover { fill: none; stroke: var(--sel); stroke-width: 1.2; stroke-dasharray: 4 3; opacity: 0.8; pointer-events: none; }
+.cw-sel { fill: rgba(226, 87, 10, 0.05); stroke: var(--sel); stroke-width: 1.6; pointer-events: none; }
+.cw-wire-hover { fill: none; stroke: var(--sel); stroke-opacity: 0.28; stroke-linecap: round; stroke-linejoin: round; pointer-events: none; }
+.cw-wire-sel { fill: none; stroke: var(--sel); stroke-opacity: 0.45; stroke-linecap: round; stroke-linejoin: round; pointer-events: none; }
+.cw-handle { fill: #ffffff; stroke: var(--sel); stroke-width: 1.6; }
+.cw-pin-hover { fill: rgba(27, 90, 209, 0.12); stroke: var(--blue); stroke-width: 1.6; pointer-events: none; }
+.cw-pin-from { fill: rgba(226, 87, 10, 0.15); stroke: var(--sel); stroke-width: 2; pointer-events: none; }
+.cw-pin-ghost { fill: none; stroke: var(--ink-2); stroke-width: 1; stroke-dasharray: 2 2; pointer-events: none; }
+.cw-pad { fill: rgba(27, 90, 209, 0.08); stroke: var(--blue); stroke-width: 1; stroke-dasharray: 2 2; pointer-events: none; }
+.cw-rubber { stroke: var(--sel); stroke-width: 1.6; stroke-dasharray: 5 4; pointer-events: none; }
+.cw-box { fill: rgba(27, 90, 209, 0.06); stroke: var(--blue); stroke-width: 1; stroke-dasharray: 4 3; }
+.cw-straight { fill: none; stroke: var(--mark); stroke-width: 1; stroke-dasharray: 6 4; pointer-events: none; }
+.cw-ghost { opacity: 0.55; pointer-events: none; }
+
+/* The library: a picture and a name for each part. */
+.cw-sub { margin: 10px 0 4px; font-size: 12px; font-weight: 600; color: var(--ink-2); text-transform: uppercase; letter-spacing: 0.04em; }
+.cw-lib { display: flex; flex-direction: column; gap: 4px; }
+.cw-part { display: flex; align-items: stretch; gap: 2px; }
+.cw-part-btn { flex: 1; min-width: 0; display: flex; align-items: center; gap: 10px; padding: 4px 8px 4px 4px; text-align: left; background: var(--paper); border: 1px solid var(--rule); border-radius: 6px; }
+.cw-part-btn:hover { border-color: var(--ink-2); }
+.cw-part-btn > span { display: flex; flex-direction: column; min-width: 0; }
+.cw-part-btn b { font-size: 13px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cw-part-btn small { font-size: 11.5px; color: var(--ink-2); }
+.cw-thumb { flex: none; background: #f6f7f5; border-radius: 4px; }
+.cw-part-tools { display: flex; flex-direction: column; gap: 2px; }
+.cw-mini { width: 26px; flex: 1; min-height: 22px; display: grid; place-items: center; padding: 0; background: var(--paper); border: 1px solid var(--rule); border-radius: 5px; color: var(--ink-2); }
+.cw-mini:hover { color: var(--ink); border-color: var(--ink-2); }
+.cw-preview { display: grid; place-items: center; margin: 4px 0 8px; }
+.cw-preview .cw-thumb { width: 100%; height: auto; max-width: 260px; }
+
+/* Ports, wires and colours in the panel. */
+.cw-port { margin: 6px 0 10px; }
+.cw-port > b { font-size: 13px; }
+.cw-port > small { margin-left: 6px; font-size: 11.5px; color: var(--ink-2); }
+.cw-port ul { list-style: none; margin: 4px 0 0; padding: 0; display: flex; flex-direction: column; gap: 3px; }
+.cw-port li { display: flex; align-items: center; gap: 8px; font-size: 12.5px; }
+.cw-tag { display: inline-block; min-width: 46px; padding: 1px 6px; border-radius: 3px; font: 600 11.5px/1.5 "Helvetica Neue", Arial, sans-serif; text-align: center; }
+.cw-to { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cw-ends { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; font-weight: 600; font-size: 13px; }
+.cw-wires { list-style: none; margin: 4px 0 8px; padding: 0; display: flex; flex-direction: column; gap: 2px; }
+.cw-wires li { display: flex; align-items: center; gap: 8px; font-size: 13px; }
+.cw-wires i, .cw-legend i { width: 14px; height: 8px; border-radius: 2px; flex: none; box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.18); }
+.cw-legend { display: grid; grid-template-columns: 1fr 1fr; gap: 3px 10px; font-size: 12px; }
+.cw-legend span { display: flex; align-items: center; gap: 6px; }
+.cw-problems { margin: 8px 0; padding: 8px 10px; border-left: 3px solid var(--extra); background: #fbf3e3; border-radius: 0 5px 5px 0; }
+.cw-problems h3 { margin-top: 0 !important; }
+.cw-problems ul { margin: 0 0 6px; padding-left: 18px; font-size: 12.5px; }
+.swatch.auto { font-size: 11px; font-weight: 700; color: #ffffff; text-shadow: 0 0 2px rgba(0, 0, 0, 0.6); }
+button.link { padding: 0; border: 0; background: none; color: var(--blue); text-decoration: underline; font: inherit; cursor: pointer; }
+
+/* While a part is drawn in the sketcher, a bar over the canvas says so, with its name. */
+.part-banner { position: absolute; top: 10px; left: 50%; transform: translateX(-50%); z-index: 6; display: flex; align-items: center; gap: 10px; max-width: calc(100% - 24px); padding: 8px 10px 8px 14px; background: var(--paper); border: 1px solid var(--rule); border-left: 4px solid var(--sel); border-radius: 8px; box-shadow: 0 4px 16px rgba(23, 32, 27, 0.16); }
+.part-banner[hidden] { display: none; }
+.part-banner-label { font-weight: 600; white-space: nowrap; }
+.part-banner input { width: 180px; height: 30px; padding: 0 8px; border: 1px solid var(--rule); border-radius: 5px; font: inherit; }
+.part-banner-note { font-size: 12.5px; color: var(--ink-2); }
+@media (max-width: 900px) { .part-banner-note { display: none; } }
+
+/* Links among the tabs: to the other page of the app. */
+.tabs a.tab-link { display: inline-flex; align-items: center; text-decoration: none; color: var(--ink-2); }
+.tabs a.tab-link:hover { color: var(--ink); }
+#app[data-workspace="circuit"] .menu:has(#view-btn) { display: none; }

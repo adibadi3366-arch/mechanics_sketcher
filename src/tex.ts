@@ -78,6 +78,22 @@ export function texRuns(tex: string): Run[] {
         return;
       }
       if (UPRIGHT.has(name)) return atom(level, true);
+      if (name === "mmlToken") {
+        // \mmlToken{mtext}[attributes]{text}: plain upright text, such as a pin's name.
+        while (tex[i] === " ") i++;
+        if (tex[i] === "{") { while (i < tex.length && tex[i] !== "}") i++; i++; }
+        while (tex[i] === " ") i++;
+        if (tex[i] === "[") { while (i < tex.length && tex[i] !== "]") i++; i++; }
+        while (tex[i] === " ") i++;
+        if (tex[i] === "{") {
+          i++;
+          let text = "";
+          while (i < tex.length && tex[i] !== "}") text += tex[i++];
+          i++;
+          push(text, false, level);
+        }
+        return;
+      }
       if (TRANSPARENT.has(name)) return;
       if (name in SYMBOLS) {
         const s = SYMBOLS[name];

@@ -42,6 +42,7 @@ export const TIPS: Record<string, Tip> = {
   frame: { title: "Axes", body: "Click where the coordinate axes should go; on a joint they stay pinned to it. Drag an arrow tip to change its length, and click a label to rename it." },
   arrow: { title: "Arrow", body: "Two clicks, like a line: where it starts and where it points. Then type its name, written as TeX math such as F_1, or just carry on. It is constrained and dimensioned like a line." },
   arcarrow: { title: "Curved arrow", body: "For moments and rotations. Click the centre, then where the arrow starts, sweep round and click where it ends." },
+  cpin: { title: "Wire pin", body: "Click where a wire is attached to the part: a point on its edge, where a connector's pin or a solder pad is. Name it as the board does (GND, 5V, Tx3) and give the pins of one connector the same connector name in the side panel: they are wired as one bundle, with their tags side by side." },
   datum: { title: "Datum point", body: "Click a joint, a spot on a curve or anywhere to mark it with a coloured dot and a name. Click the name to change it, and drag it to move it." },
   note: { title: "Note", body: "Click where the text should start and type it. Put math between dollar signs, as in $F_1 = 2a$, and \\\\ where a new line should start. Drag a note to move it. Select it and drag the handle past its end to turn it, or press R." },
   centermark: { title: "Centre mark", body: "Click a circle or arc to give it centre lines. Drag an end of the mark to make it larger or smaller; the side panel sets how it is dashed." },

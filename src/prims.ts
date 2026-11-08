@@ -154,6 +154,8 @@ export interface TextPrim extends Base {
   latex?: string;
   /** How many lines the text has, when more than one. */
   lines?: number;
+  /** Font size as the em in paper mm, where it is not the standard 10 pt. */
+  size?: number;
 }
 /** One closed outline of a region: a whole circle, or straight and arc pieces end to end. */
 export type Outline =
@@ -279,6 +281,28 @@ function noteText(pieces: string[]): string[] {
 }
 
 /** A note as TeX math for the screen and the SVG: its text upright, its math as typed, its lines stacked. */
+/**
+ * Plain text in sans, bold or not, as wiring guides label things: hyphens,
+ * slashes and spaces stay as typed. MathJax sets it in its own sans fonts, so
+ * the SVG needs no font; the TikZ export writes `sansLatex` instead.
+ */
+export function sansTex(text: string, bold = false): string {
+  const safe = text.replace(/[\\{}]/g, "").replace(/\s+/g, " ").trim() || " ";
+  return `\\mmlToken{mtext}[mathvariant="${bold ? "bold-sans-serif" : "sans-serif"}"]{${safe}}`;
+}
+
+/** The same text for LaTeX, in the document's own sans. */
+export function sansLatex(text: string, bold = false): string {
+  const SAFE: Record<string, string> = {
+    "\\": "", "{": "", "}": "", "%": "\\%", "&": "\\&", "#": "\\#", "_": "\\_", "^": "\\^{}", "~": "\\~{}", "$": "\\$",
+    // Signs a text font may not have, set the way LaTeX sets them anywhere.
+    "−": "$-$", "×": "$\\times$", "±": "$\\pm$", "→": "$\\rightarrow$", "←": "$\\leftarrow$", "µ": "$\\mu$", "μ": "$\\mu$", "Ω": "$\\Omega$",
+    "²": "\\textsuperscript{2}", "³": "\\textsuperscript{3}", "°": "\\textdegree{}", "…": "\\ldots{}",
+  };
+  const body = text.trim().replace(/[\\{}%&#_^~$−×±→←µμΩ²³°…]/g, (c) => SAFE[c]);
+  return bold ? `\\textsf{\\textbf{${body}}}` : `\\textsf{${body}}`;
+}
+
 export function noteTex(typed: string): string {
   const lines = noteLines(typed.trim()).map((pieces) =>
     noteText(pieces).map((t, i) => (i % 2 ? t : t ? `\\text{${t}}` : "")).join(""));
@@ -827,8 +851,15 @@ function datumPrims(sk: Sketch, s: Datum, mm: number): Prim[] {
       for (let i = 0; i <= 8; i++) pts.push(polar(at, r, from + (i * Math.PI) / 16));
       out.push({ ...base, k: "poly", pts, stroke: "symbol", fill: "ink", color: s.color, ink: s.color });
     }
+  } else if (s.pin) {
+    // A pin of a part: a ring round its point, its name in plain sans, as the tags in a circuit will show it.
+    out.push({ ...base, k: "circle", c: at, r: PAPER.datumRadius * 1.25, stroke: "symbol", fill: "paper", ink: s.color, width: 0.3 });
+    out.push({ ...base, k: "circle", c: at, r: PAPER.datumRadius * 0.5, stroke: "symbol", fill: "ink", color: s.color, ink: s.color });
   } else out.push({ ...base, k: "circle", c: at, r: PAPER.datumRadius, stroke: "symbol", fill: "ink", color: s.color });
-  if (s.label.trim()) out.push({ ...base, k: "text", at: [at[0] + s.dx, at[1] + s.dy], tex: labelTex(s.label), anchor: "c", part: "label" });
+  if (s.label.trim()) {
+    const tex = s.pin ? sansTex(s.label.trim(), true) : labelTex(s.label);
+    out.push({ ...base, k: "text", at: [at[0] + s.dx, at[1] + s.dy], tex, anchor: "c", part: "label", ...(s.pin ? { size: PAPER.em * 0.8, ink: s.color } : {}) });
+  }
   return out;
 }
 
@@ -1456,7 +1487,12 @@ export function buildPrims(sk: Sketch, mm: number, opts: BuildOptions): Prim[] {
       name();
     }
   }
-  for (const sym of sk.symbols) if (sym.type !== "fill") out.push(...symbolPrims(sk, sym, mm));
+  for (const sym of sk.symbols) {
+    if (sym.type === "fill") continue;
+    // The pins of a part are marks for the part's editor: in a circuit the wires and their tags show them.
+    if (sym.type === "datum" && sym.pin && !opts.editor) continue;
+    out.push(...symbolPrims(sk, sym, mm));
+  }
   for (const c of sk.constraints) {
     if (!isDimension(c)) continue;
     if ((c.hidden || c.measure) && !opts.editor) continue;
@@ -1550,11 +1586,12 @@ export function arrowHeads(p: LinePrim | ArcPrim | BezierPrim): V[][] {
  * Box of a text primitive in paper mm (y-up), including the part of the text
  * that hangs below its baseline.
  */
-export function textBox(p: TextPrim, em = PAPER.em): Box {
+export function textBox(p: TextPrim, em = p.size ?? PAPER.em): Box {
   const m = texEngine().measure(p.tex);
   const w = m.w * em;
   const h = (m.asc + m.desc) * em;
-  const sep = PAPER.textSep;
+  // Text set smaller or larger keeps its gap in step with it.
+  const sep = (PAPER.textSep * em) / PAPER.em;
   const a = p.anchor;
   const x0 = a.includes("w") ? p.at[0] + sep : a.includes("e") ? p.at[0] - sep - w : p.at[0] - w / 2;
   const y0 = a.includes("s") ? p.at[1] + sep : a.includes("n") ? p.at[1] - sep - h : p.at[1] - h / 2;

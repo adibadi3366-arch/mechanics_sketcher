@@ -102,6 +102,20 @@ export const ICONS: Record<string, string> = {
   eyeoff: `<path d="M2 10s3-5.5 8-5.5S18 10 18 10s-3 5.5-8 5.5S2 10 2 10z"/><circle cx="10" cy="10" r="2.4"/><path d="M3.5 16.5l13-13"/>`,
   page: `<path d="M5 2.5h7l3.5 3.5v11.5H5z"/><path d="M12 2.5V6h3.5M7.5 10h5M7.5 13h5"/>`,
   pageoff: `<path d="M5 2.5h7l3.5 3.5v11.5H5z"/><path d="M12 2.5V6h3.5"/><path d="M3.5 16.5l13-13"/>`,
+  // The Wiring workspace: a board with a bundle off it, a wire between two tags, a plug going into a socket,
+  // a board with a plus, a board with an arrow in, a quarter turn, a bundle laid again, and lists in and out.
+  board: `<rect x="3" y="3" width="10" height="10" rx="1.5"/><rect x="5.6" y="5.6" width="4.8" height="4.8" rx="0.6" stroke-width="1.2"/><path d="M13 6.5h2.5a1.5 1.5 0 0 1 1.5 1.5v9M13 9.5h1M10 13v1.5a1.5 1.5 0 0 0 1.5 1.5H14" stroke-width="1.3"/>`,
+  wire: `<rect x="2" y="3.2" width="5" height="2.6" rx="0.8" fill="currentColor" stroke="none"/><rect x="13" y="14.2" width="5" height="2.6" rx="0.8" fill="currentColor" stroke="none"/><path d="M7 4.5h3a2 2 0 0 1 2 2v7a2 2 0 0 0 2 2" stroke-width="1.5"/>`,
+  plug: `<rect x="11" y="4.5" width="6.5" height="11" rx="1"/><path d="M13.3 7.5h2M13.3 10h2M13.3 12.5h2" stroke-width="1.2"/><path d="M2.5 7.5h6.5M2.5 10h6.5M2.5 12.5h6.5" stroke-width="1.4"/><path d="M9 6v8"/>`,
+  partnew: `<rect x="2.5" y="5" width="10" height="10" rx="1.5"/><path d="M5 12.5l2.2-5 2.6 3.5" stroke-width="1.2"/><path d="M15.5 3v6M12.5 6h6"/>`,
+  partin: `<rect x="2.5" y="6" width="10" height="10" rx="1.5"/><path d="M7.5 9v4M10 11H5" stroke-width="1.2"/><path d="M17.5 2.5v6.5h-5M17.5 9l-4-4" stroke-width="1.4"/>`,
+  rotate: `<path d="M15.8 9A6 6 0 1 1 13 4.6"/><path d="M13.6 1.8l-.4 3.1 3.1.4"/><rect x="7.4" y="7.4" width="4" height="4" rx="0.6" stroke-width="1.2"/>`,
+  reroute: `<path d="M3 15.5h4.5a2 2 0 0 0 2-2v-7a2 2 0 0 1 2-2H17" stroke-width="1.5"/><path d="M3 12.5h2.5" stroke-width="1.5" stroke-dasharray="1.5 1.5"/><path d="M14.5 2l2.5 2.5-2.5 2.5" stroke-width="1.4"/>`,
+  csvin: `<path d="M3 3.5h9.5l3 3V17H3z" stroke-width="1.3"/><path d="M5.5 9h7.5M5.5 11.8h7.5M5.5 14.5h7.5M9.2 7v9" stroke-width="1"/><path d="M19 1v5.5h-4.5" stroke-width="1.4"/>`,
+  csvout: `<path d="M3 3.5h9.5l3 3V17H3z" stroke-width="1.3"/><path d="M5.5 9h7.5M5.5 11.8h7.5M5.5 14.5h7.5M9.2 7v9" stroke-width="1"/><path d="M14.5 1H19v4.5M19 1l-4.5 4.5" stroke-width="1.4"/>`,
+  partout: `<rect x="2.5" y="6" width="10" height="10" rx="1.5"/><path d="M7.5 9v4M10 11H5" stroke-width="1.2"/><path d="M13 2.5h4.5V7M17.5 2.5L13 7" stroke-width="1.4"/>`,
+  // Pin: a ring with a dot, where a wire is attached on a part.
+  cpin: `<circle cx="10" cy="10" r="4.5" stroke-width="1.5"/>${dot(10, 10, 1.7)}<path d="M14.5 10h3" stroke-width="1.5"/>`,
   plus: `<path d="M10 4v12M4 10h12"/>`,
 };
 

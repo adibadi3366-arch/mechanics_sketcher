@@ -157,7 +157,7 @@ export function primsToSvg(prims: Prim[], k = 1, page?: Box): string | null {
       const corner = M([t.x0, t.y1]);
       // currentColor would depend on where the file is placed; make it black outright.
       const ink = p.ink ?? "#000";
-      const glyphs = engine.svg(p.tex, corner[0], corner[1], PAPER.em, "label").replace(/currentColor/g, ink).replace(' class="label"', ` fill="${ink}" stroke="none"`);
+      const glyphs = engine.svg(p.tex, corner[0], corner[1], p.size ?? PAPER.em, "label").replace(/currentColor/g, ink).replace(' class="label"', ` fill="${ink}" stroke="none"`);
       if (p.rot && glyphs) {
         // Counter-clockwise on paper is a negative angle once y points down.
         const at = M(p.at);
@@ -349,7 +349,9 @@ export function tikzParts(prims: Prim[], k = 1): { styles: string[]; lines: stri
         (p.rot ? `, rotate=${deg(p.rot)}` : "") +
         // A node breaks its text into lines only once it is told how to align them.
         (p.lines ? ", align=left" : "") +
-        (p.ink ? `, text=${tikzColor(p.ink)}` : "");
+        (p.ink ? `, text=${tikzColor(p.ink)}` : "") +
+        // Set smaller or larger than the standard 10 pt: a size of its own, in points.
+        (p.size !== undefined && Math.abs(p.size - PAPER.em) > 1e-6 ? `, font=\\fontsize{${num(p.size / PT_MM, 2)}}{${num((p.size / PT_MM) * 1.2, 2)}}\\selectfont` : "");
       if (p.anchor !== "c") needLabel = true;
       // A note is text with math in it, a label is math; LaTeX takes accented letters in text only.
       const body = p.latex !== undefined ? latexAccents(p.latex, "text") : `$${latexAccents(p.tex, "math")}$`;

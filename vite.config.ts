@@ -1,5 +1,5 @@
 /// <reference types="vitest/config" />
-import { readFileSync } from "node:fs";
+import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { defineConfig, type Plugin } from "vite";
 import { viteSingleFile } from "vite-plugin-singlefile";
@@ -75,7 +75,7 @@ function landingPage(): Plugin {
         .replace('href="manifest.webmanifest"', 'href="manifest-beta.webmanifest"')
         .replace('href="icon-192.png"', 'href="icon-beta-192.png"')
         .replace("<!--beta-->", `<span class="beta-badge" title="New features are tried out here first">beta</span>`)
-        .replace("<!--beta-note-->", `<p class="beta-note">This is the beta, where new features are tried out first. Its sketches are kept apart from the released app at <a href="../">mech-sketch.org</a>.</p>`);
+        .replace("<!--beta-note-->", `<p class="beta-note">This is the beta, where new features are tried out first. Its sketches are kept apart from the released app at <a href="../">mech-sketch.org</a>. New here: <a href="circuit/">wiring guides</a>, for showing how a drone or any electronics project is wired up.</p>`);
     }
     // The released site does not name the beta, not even in a comment.
     return html.replace("<!--beta-->", "").replace("<!--beta-note-->", "");
@@ -96,17 +96,43 @@ function landingPage(): Plugin {
   };
 }
 
+/**
+ * The Wiring page, at circuit/: the same app, opened on its Wiring
+ * workspace, where parts are placed and wired into a wiring guide. Its page
+ * is the app's, with a tag that tells the app which page it is; it is written
+ * here before each build and built on its own (vite build --mode circuit), as
+ * a page made into one file has to be.
+ */
+function circuitPage(): string {
+  const html = readFileSync(fileURLToPath(new URL("./app/index.html", import.meta.url)), "utf8")
+    .replace("<head>", `<head>\n<meta name="mech-sketch-page" content="circuit">`)
+    .replace(/<title>[^<]*<\/title>/, "<title>Mech Sketch Wiring – wiring guides for electronics projects</title>")
+    .replace(/<meta name="description" content="[^"]*">/, `<meta name="description" content="Draw wiring guides for electronics projects: boards as clean vector drawings, colour-coded pin tags and wire bundles, exported as SVG or TikZ.">`);
+  const dir = fileURLToPath(new URL("./circuit/", import.meta.url));
+  mkdirSync(dir, { recursive: true });
+  const file = `${dir}index.html`;
+  writeFileSync(file, html);
+  return file;
+}
+
 // The app, with the solver and the fonts, is inlined into one app/index.html,
 // so it runs from a file:// URL as well as from a server.
-export default defineConfig({
-  base: "./",
-  plugins: [planegcsWasm(), betaPage(), viteSingleFile(), landingPage()],
-  // When this copy was built, shown in the app so it is easy to tell which version is open.
-  define: { __BUILD_TIME__: JSON.stringify(new Date().toISOString()) },
-  build: {
-    target: "es2022",
-    assetsInlineLimit: 100_000_000,
-    rollupOptions: { input: fileURLToPath(new URL("./app/index.html", import.meta.url)) },
-  },
-  test: { environment: "node" },
+export default defineConfig(({ mode }) => {
+  const circuit = mode === "circuit";
+  const input = circuit ? circuitPage() : fileURLToPath(new URL("./app/index.html", import.meta.url));
+  if (!circuit) circuitPage();
+  return {
+    base: "./",
+    plugins: [planegcsWasm(), betaPage(), viteSingleFile(), ...(circuit ? [] : [landingPage()])],
+    // When this copy was built, shown in the app so it is easy to tell which version is open.
+    define: { __BUILD_TIME__: JSON.stringify(new Date().toISOString()) },
+    build: {
+      target: "es2022",
+      assetsInlineLimit: 100_000_000,
+      // The Wiring page is built after the app, into the same folder.
+      emptyOutDir: !circuit,
+      rollupOptions: { input },
+    },
+    test: { environment: "node" },
+  };
 });

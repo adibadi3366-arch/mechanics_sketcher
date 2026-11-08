@@ -32,15 +32,20 @@ const LIVE: News = {
   close: "Got it",
 };
 
-/** In the beta: what was tried out here is in the released app now. */
+/** In the beta: what is new here, to try out. */
 const BETA: News = {
-  title: "These features are live",
+  title: "New in the beta: wiring guides",
   body:
-    `<p class="lead">Sketches, Project and Move to sketch, relative dimensions, distances between parallel lines, equal dimensions, splines and Bézier curves, hatched fills, turning notes, line runs, SVG saves that reopen, CAD and picture import and the fitted export are now in the released Mech Sketch at mech-sketch.org. Thank you for trying them out.</p>` +
-    `<p>Your sketch here stays in the beta, apart from the released app's. To carry it over, <b>Save</b> it here and <b>Open</b> the file there.</p>` +
-    `<p class="muted">The next new features will show up here first.</p>`,
-  link: { href: "../../", text: "Open the released app" },
-  close: "Stay in the beta",
+    `<p class="lead">A page of its own for showing how a drone, or any electronics project, is wired up, the way an assembly manual does.</p>` +
+    `<ul class="news">` +
+    `<li><b>Boards as clean vector drawings</b>, with a coloured tag for every pin: a starter library of drone parts, and a whole quadcopter to start from.</li>` +
+    `<li><b>Plug in</b> two ports and every pin is wired to the one it goes with, Tx to Rx. The wires run as bundles, with rounded or square corners.</li>` +
+    `<li><b>Connection lists</b> in CSV wire a whole guide at once, and the guide's wires export the same way.</li>` +
+    `<li><b>Your own parts</b>, drawn in the sketcher with wire pins, or from a component file, which an AI chat can write from a photo of a board.</li>` +
+    `<li>Export as SVG or TikZ.</li>` +
+    `</ul>`,
+  link: { href: "../circuit/", text: "Open the Wiring page" },
+  close: "Later",
 };
 
 export const news = (beta: boolean): News => (beta ? BETA : LIVE);

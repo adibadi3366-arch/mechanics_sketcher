@@ -25,7 +25,7 @@ export interface Drawing {
 type Tagged = { sketch?: Id };
 
 /** Settings of the drawing as a whole, which every sketch shares. */
-const SHARED = ["version", "nextId", "figureWidthMm", "dimScale", "showOrigin", "loadScale", "supportScale", "plots", "lengthScale"] as const;
+const SHARED = ["version", "nextId", "figureWidthMm", "dimScale", "showOrigin", "loadScale", "supportScale", "plots", "lengthScale", "circuit"] as const;
 
 /** Gives `to` the settings `from` has for the whole drawing. */
 export function shareSettings(from: Sketch, to: Sketch): void {

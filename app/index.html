@@ -65,6 +65,19 @@
   <main class="stage" id="stage">
     <svg id="canvas" role="img" aria-label="Sketch"></svg>
     <svg id="plot-canvas" role="img" aria-label="Plot"></svg>
+    <svg id="circuit-canvas" role="img" aria-label="Wiring guide"></svg>
+    <div class="empty" id="circuit-empty" hidden>
+      <p class="empty-title">Draw a wiring guide</p>
+      <p>Pick a part in the library on the right and click where it goes, then wire its pins with W, or plug two ports together with B. A connection list (CSV) wires a whole guide at once.</p>
+      <p><button type="button" class="primary" data-cact="example">Open the example</button></p>
+    </div>
+    <div class="part-banner" id="part-banner" hidden>
+      <span class="part-banner-label">Drawing a part</span>
+      <input id="part-name" type="text" spellcheck="false" autocomplete="off" aria-label="Name of the part">
+      <span class="part-banner-note">Draw it, dimension it in mm, and put pins on it with the Wire pin tool on the Annotate tab.</span>
+      <button type="button" class="text-btn" data-act="part-cancel">Cancel</button>
+      <button type="button" class="primary" data-act="part-done">Done</button>
+    </div>
     <div class="empty" id="plot-empty" hidden>
       <p class="empty-title">Plot a function</p>
       <p>A plot is a figure of its own: functions over a pair of axes, such as an internal force diagram or a path over time. It is kept with the sketch and exported on its own.</p>
@@ -129,6 +142,25 @@
     <div class="dialog-actions split">
       <label class="check"><input id="welcome-never" type="checkbox" checked><span>Don't show this again</span></label>
       <button type="submit" value="ok" class="primary">Start sketching</button>
+    </div>
+  </form>
+</dialog>
+<dialog id="wiring-dialog" class="welcome" aria-labelledby="wiring-title">
+  <form method="dialog">
+    <h2 id="wiring-title">Wiring guides</h2>
+    <p class="lead">Show how a drone, or any electronics project, is wired up: boards drawn as clean vector pictures, a coloured tag with the name of every pin, and the wires between them in bundles, as an assembly manual shows them.</p>
+    <ol class="steps">
+      <li><b>Place parts.</b> Pick one in the library on the right and click where it goes. R turns it, F mirrors it. The example is a whole quadcopter, wired.</li>
+      <li><b>Wire them.</b> Plug in (B): click a tag of one port, then a tag of the port it plugs into, and every pin is wired to the one it goes with, Tx to Rx. Wire (W) wires a single pin to a pin.</li>
+      <li><b>Lay the bundles.</b> Bundles find their own way and follow their parts when you move them. Drag a middle stretch of one to lay it another way; a bundle that nearly runs straight is pulled straight.</li>
+      <li><b>Connection lists.</b> Import a CSV with a row for each wire to wire a whole guide at once, and export the guide's wires the same way.</li>
+      <li><b>Your own parts.</b> Draw a part in the sketcher, with pins on it from the Annotate tab, or import a component file. One can be written from a photo of a board by an AI chat: the library has the instructions to give it.</li>
+      <li><b>Export.</b> SVG, or TikZ for LaTeX, at the size on paper set under Look. The colours of tags and wires come from what each pin does.</li>
+    </ol>
+    <p class="muted">Your guide is kept in this browser; Save writes it to an SVG file that Open brings back. The sketcher is a click away, under Sketcher.</p>
+    <div class="dialog-actions split">
+      <label class="check"><input id="wiring-never" type="checkbox" checked><span>Don't show this again</span></label>
+      <button type="submit" value="ok" class="primary">Start wiring</button>
     </div>
   </form>
 </dialog>

@@ -42,6 +42,9 @@ import { type ReportKind, composeReport } from "./report";
 import { TipBook, welcomeDue, setWelcomeDue, firstInSession, newsDue, setNewsSeen } from "./guide";
 import { type BeamEnds, straightBeam, curvedBeam } from "./beam";
 import { PlotWorkspace } from "./plotwork";
+import { CircuitWorkspace } from "./circuit/workspace";
+import { partFromSketch } from "./circuit/sketchpart";
+import { newCircuit, circuitId } from "./circuit/model";
 import { baseline, beamAxis, diagramShape, plotPeak, traceShape, traceReach } from "./diagram";
 import { defaultLook, lookOf, elementLength, springTurns } from "./element";
 
@@ -55,7 +58,7 @@ type LineTool = (typeof LINE_TOOLS)[number];
 const isLineTool = (t: Tool): t is LineTool => (LINE_TOOLS as readonly Tool[]).includes(t);
 /** Tools that take a centre, a start and a sweep, and make an arc. */
 const isArcTool = (t: Tool): t is "arc" | "arcarrow" | "arcdamper" => t === "arc" || t === "arcarrow" || t === "arcdamper";
-type SymbolTool = "pin" | "roller" | "wall" | "frame" | "centermark" | "balloon" | "fill" | "hatch" | "datum" | "mass" | "note" | "load" | "lineload" | "moment" | "diagram" | "etalon" | "rightangle";
+type SymbolTool = "cpin" | "pin" | "roller" | "wall" | "frame" | "centermark" | "balloon" | "fill" | "hatch" | "datum" | "mass" | "note" | "load" | "lineload" | "moment" | "diagram" | "etalon" | "rightangle";
 /** Tools that copy what is selected and take one more click to say how: about which line, around which point. */
 type CopyTool = "mirror" | "turn";
 type Command =
@@ -65,9 +68,16 @@ type Command =
 type Tool = "select" | DrawTool | "trim" | "project" | CopyTool | SymbolTool | Command;
 /** Sketch holds what shapes the geometry; Annotate what is added to the figure; Dynamics what a model that moves is drawn with. */
 /** Plot is a workspace of its own: its tab swaps the sketch for the plots that are kept with it. */
-type Tab = "sketch" | "annotate" | "dynamics" | "plot";
+/** Wiring is the workspace of the Wiring page, where parts are placed and wired into a wiring guide. */
+type Tab = "sketch" | "annotate" | "dynamics" | "plot" | "circuit";
 const TABS: Tab[] = ["sketch", "annotate", "dynamics", "plot"];
-const TAB_NAMES: Record<Tab, string> = { sketch: "Sketch", annotate: "Annotate", dynamics: "Dynamics", plot: "Plot" };
+const TAB_NAMES: Record<Tab, string> = { sketch: "Sketch", annotate: "Annotate", dynamics: "Dynamics", plot: "Plot", circuit: "Wiring" };
+/** The Wiring page: the app opened on its Wiring workspace, with the sketcher for drawing parts. */
+const CIRCUIT_PAGE = typeof document !== "undefined" && document.querySelector('meta[name="mech-sketch-page"]')?.getAttribute("content") === "circuit";
+/** Set once the Wiring page's welcome has been seen and put away for good. */
+const WIRING_WELCOMED_KEY = "mech-sketch.wiring.welcomed";
+/** The colour pins are marked in while a part is drawn. */
+const PIN_COLOR = "#e0302b";
 
 /**
  * How a plain curve is drawn in the figure: a solid or dashed edge, or a
@@ -207,6 +217,7 @@ const TOOLS: ToolDef[] = [
   { id: "arrow", label: "Arrow", icon: "arrow", tab: "annotate", group: 4 },
   { id: "arcarrow", label: "Curved arrow", icon: "arcarrow", tab: "annotate", group: 4 },
   { id: "datum", label: "Datum point", icon: "datum", tab: "annotate", group: 4 },
+  { id: "cpin", label: "Wire pin: where a wire is attached to the part", short: "Wire pin", icon: "cpin", tab: "annotate", group: 4 },
   { id: "note", label: "Note", key: "N", icon: "note", tab: "annotate", group: 4 },
   { id: "centermark", label: "Centre mark", icon: "centermark", tab: "annotate", group: 4 },
   { id: "rightangle", label: "Right angle", icon: "rightangle", tab: "annotate", group: 4 },
@@ -229,7 +240,7 @@ const COMMAND_IDS: Command[] = [
 const isPlaced = (t: Tool): t is "dimension" | "measure" => t === "dimension" || t === "measure";
 const isCommand = (t: Tool): t is Command => (COMMAND_IDS as Tool[]).includes(t);
 const isSymbolTool = (t: Tool): t is SymbolTool =>
-  ["pin", "roller", "wall", "frame", "centermark", "balloon", "fill", "hatch", "datum", "mass", "note", "load", "lineload", "moment", "diagram", "etalon", "rightangle"].includes(t);
+  ["cpin", "pin", "roller", "wall", "frame", "centermark", "balloon", "fill", "hatch", "datum", "mass", "note", "load", "lineload", "moment", "diagram", "etalon", "rightangle"].includes(t);
 const isCopyTool = (t: Tool): t is CopyTool => t === "mirror" || t === "turn";
 const toolDef = (t: Tool | "shift" | "construction"): ToolDef => TOOLS.find((d) => d.id === t)!;
 
@@ -301,7 +312,7 @@ const SKETCH_NAME_KEY = "mech-sketch.sketchName";
 /** Range of the line thickness slider, in points. */
 const WEIGHT_MIN = 0.1, WEIGHT_MAX = 3;
 /** What is written to a file: the exported figure, or the sketch itself. Each remembers its own name and folder. */
-type SaveSlot = "figure" | "sketch" | "plot";
+type SaveSlot = "figure" | "sketch" | "plot" | "circuit";
 const EDIT_SCALE_KEY = "mech-sketch.editScale";
 /** Range of the slider for the size of annotations while editing, in percent. */
 const EDIT_SCALE_MIN = 50, EDIT_SCALE_MAX = 250;
@@ -312,7 +323,7 @@ const DIM_SCALE_MIN = 30, DIM_SCALE_MAX = 300;
 /** Where the released app keeps the sketch being worked on. */
 const LIVE_AUTOSAVE_KEY = "mech-sketch.autosave";
 /** The beta keeps its own: a sketch with something new in it would not open whole in the released app. */
-const AUTOSAVE_KEY = BETA ? "mech-sketch-beta.autosave" : LIVE_AUTOSAVE_KEY;
+const AUTOSAVE_KEY = CIRCUIT_PAGE ? (BETA ? "mech-sketch-beta.wiring.autosave" : "mech-sketch.wiring.autosave") : BETA ? "mech-sketch-beta.autosave" : LIVE_AUTOSAVE_KEY;
 /**
  * Screen pixels per annotation mm while editing. Text, arrowheads and symbols
  * keep this size however far the view is zoomed, as in a CAD sketcher.
@@ -446,8 +457,30 @@ export class App {
     { sketch: () => this.sk, commit: () => this.commit(), render: () => this.render(), touch: () => this.touch(), toast: (m) => this.toast(m) },
     $<SVGSVGElement>("#plot-canvas"), this.panel, $("#plot-empty"),
   );
+  /** The Wiring workspace, on the Wiring page. Its guide is kept with the drawing, as the plots are. */
+  private circuit = new CircuitWorkspace(
+    {
+      sketch: () => this.sk, commit: () => this.commit(), render: () => this.render(), touch: () => this.touch(), toast: (m) => this.toast(m),
+      editPart: (id) => this.startPartEdit(id),
+      save: (text, ext, mime, what, name) => void this.saveAs(text, ext, mime, what, "circuit", name),
+    },
+    $<SVGSVGElement>("#circuit-canvas"), this.panel, $("#circuit-empty"),
+  );
+  /**
+   * A part being drawn in the sketcher for the wiring guide: which part (null
+   * for a new one), its name, and the guide's drawing and undo history, put
+   * aside until the part is done.
+   */
+  private partEdit: { id: string | null; name: string; doc: Sketch; history: History } | null = null;
+  /** The connector the last pin was put on, for the next one. */
+  private pinPort = "J1";
 
   constructor(private solver: SketchSolver) {
+    if (CIRCUIT_PAGE) {
+      this.tab = "circuit";
+      $("#app").dataset.workspace = "circuit";
+      $("#app").dataset.page = "circuit";
+    }
     this.buildToolbars();
     this.bindEvents();
     this.restore();
@@ -455,6 +488,7 @@ export class App {
     this.fit();
     this.solve();
     this.history.reset(this.whole());
+    if (CIRCUIT_PAGE) this.circuit.enter();
     this.render();
     this.greet();
   }
@@ -470,6 +504,13 @@ export class App {
         : "";
     }
     for (const row of document.querySelectorAll<HTMLElement>("[data-support-row]")) row.hidden = !SUPPORT_URL;
+    // The Wiring page has a welcome of its own, shown once.
+    if (CIRCUIT_PAGE) {
+      let seen = false;
+      try { seen = localStorage.getItem(WIRING_WELCOMED_KEY) === "1"; } catch { /* storage unavailable */ }
+      if (!seen) this.showWiringWelcome();
+      return;
+    }
     const first = firstInSession();
     if (welcomeDue()) {
       // Someone new is shown round instead; what is new is new to them anyway.
@@ -498,11 +539,25 @@ export class App {
 
   /** The greeting and the short guide. Also what the Help button opens. */
   private showWelcome(): void {
+    if (CIRCUIT_PAGE) return this.showWiringWelcome();
     const dialog = $<HTMLDialogElement>("#welcome-dialog");
     if (dialog.open) return;
     const never = $<HTMLInputElement>("#welcome-never");
     never.checked = true;
     dialog.addEventListener("close", () => setWelcomeDue(!never.checked), { once: true });
+    dialog.showModal();
+    dialog.querySelector<HTMLElement>("button.primary")?.focus();
+  }
+
+  /** The Wiring page's own welcome: what a wiring guide is and how one is made. */
+  private showWiringWelcome(): void {
+    const dialog = $<HTMLDialogElement>("#wiring-dialog");
+    if (dialog.open) return;
+    const never = $<HTMLInputElement>("#wiring-never");
+    never.checked = true;
+    dialog.addEventListener("close", () => {
+      try { if (never.checked) localStorage.setItem(WIRING_WELCOMED_KEY, "1"); else localStorage.removeItem(WIRING_WELCOMED_KEY); } catch { /* storage unavailable */ }
+    }, { once: true });
     dialog.showModal();
     dialog.querySelector<HTMLElement>("button.primary")?.focus();
   }
@@ -693,7 +748,7 @@ export class App {
 
   private autosave(): void {
     try {
-      localStorage.setItem(AUTOSAVE_KEY, serialize(this.whole()));
+      localStorage.setItem(AUTOSAVE_KEY, serialize(this.partEdit ? this.guideWithPart(true) : this.whole()));
     } catch {
       // Storage can be unavailable (private window, file:// in some browsers).
     }
@@ -702,7 +757,7 @@ export class App {
   private restore(): void {
     try {
       // The beta starts out from the sketch the released app was left with, and goes its own way from there.
-      const saved = localStorage.getItem(AUTOSAVE_KEY) ?? (BETA ? localStorage.getItem(LIVE_AUTOSAVE_KEY) : null);
+      const saved = localStorage.getItem(AUTOSAVE_KEY) ?? (BETA && !CIRCUIT_PAGE ? localStorage.getItem(LIVE_AUTOSAVE_KEY) : null);
       if (saved) this.loadDrawing(deserialize(saved));
       this.exportName = localStorage.getItem(EXPORT_NAME_KEY) || this.exportName;
       this.sketchName = localStorage.getItem(SKETCH_NAME_KEY) || this.sketchName;
@@ -739,6 +794,7 @@ export class App {
     this.closeEditor();
     this.solve();
     this.plots.sync();
+    this.circuit.sync();
   }
 
   private exists(id: Id): boolean {
@@ -766,6 +822,7 @@ export class App {
 
   private draw(): void {
     if (this.tab === "plot") return this.drawPlot();
+    if (this.tab === "circuit") return this.drawCircuit();
     this.fig = this.preview ? fitFigure(this.figureSketch()) : null;
     const mm = this.mm();
     this.prims = this.fig ? this.fig.prims : buildPrims(this.sk, mm, { editor: !this.preview });
@@ -824,6 +881,102 @@ export class App {
   }
 
   /** The same for the Plot workspace, which draws its own canvas and panel. */
+  // ---- drawing a part for the wiring guide --------------------------------------
+
+  /**
+   * Opens a part of the wiring guide in the sketcher: its drawing, or a blank
+   * sketch for a new part. The guide and its undo history are put aside until
+   * the part is done or given up.
+   */
+  private startPartEdit(id: string | null): void {
+    if (this.partEdit) return;
+    const doc = this.whole();
+    const c = doc.circuit ?? newCircuit();
+    const part = id ? c.parts.find((p) => p.id === id) : undefined;
+    if (id && !part?.sketch) return this.toast("That part was not drawn here, so there is no drawing to change.");
+    let name = part?.name ?? "New part";
+    if (!part) for (let k = 2; c.parts.some((p) => p.name === name); k++) name = `New part ${k}`;
+    this.partEdit = { id, name, doc, history: this.history };
+    this.history = new History();
+    const sk = part?.sketch ? structuredClone(part.sketch) : emptySketch();
+    delete sk.circuit;
+    this.selection.clear();
+    this.replaceSketch(sk);
+    this.history.reset(this.whole());
+    this.pinPort = "J1";
+    this.buildTabs();
+    this.setTab("sketch");
+    this.fit();
+    this.autosave();
+    this.touch();
+    if (!part) setTimeout(() => $<HTMLInputElement>("#part-name").select(), 0);
+  }
+
+  /** The part being drawn, made from the sketch as it is now. Throws, saying why, when it cannot be made yet. */
+  private partInProgress(c: NonNullable<Sketch["circuit"]>): { part: import("./circuit/model").PartDef; problems: string[]; isNew: boolean } {
+    const pe = this.partEdit!;
+    const sk = this.whole();
+    delete sk.circuit;
+    const old = pe.id ? c.parts.find((p) => p.id === pe.id) : undefined;
+    const base = old ? { ...old, name: pe.name } : { id: circuitId(c, "p"), name: pe.name, ref: pe.name.replace(/[,\s]+/g, " ").trim() || "Part" };
+    const got = partFromSketch(sk, base);
+    return { ...got, isNew: !old };
+  }
+
+  /** The guide put aside, with the part being drawn in it as far as it has got: what is kept if the page is closed meanwhile. */
+  private guideWithPart(draft: boolean): Sketch {
+    const pe = this.partEdit!;
+    const doc = structuredClone(pe.doc);
+    const c = (doc.circuit ??= newCircuit());
+    try {
+      const { part, isNew } = this.partInProgress(c);
+      if (isNew) { if (draft) part.name = `${part.name} (unfinished)`; c.parts.push(part); }
+      else c.parts = c.parts.map((p) => (p.id === part.id ? part : p));
+    } catch { /* nothing drawn yet: the guide as it was */ }
+    return doc;
+  }
+
+  /** Back to the guide: with the part as drawn when `keep`, or as it was. */
+  private finishPartEdit(keep: boolean): void {
+    const pe = this.partEdit;
+    if (!pe) return;
+    const doc = structuredClone(pe.doc);
+    const c = (doc.circuit ??= newCircuit());
+    let made: { part: import("./circuit/model").PartDef; isNew: boolean; problems: string[] } | null = null;
+    if (keep) {
+      try {
+        const got = this.partInProgress(c);
+        if (got.isNew) c.parts.push(got.part);
+        else c.parts = c.parts.map((p) => (p.id === got.part.id ? got.part : p));
+        made = got;
+        if (got.problems.length) this.toast(got.problems[0]);
+      } catch (err) {
+        return this.toast((err as Error).message);
+      }
+    }
+    this.partEdit = null;
+    this.history = pe.history;
+    this.selection.clear();
+    this.setTool("select");
+    this.replaceSketch(doc);
+    this.buildTabs();
+    this.setTab("circuit");
+    if (made) this.circuit.partDrawn(made.part, made.isNew);
+    this.commit();
+    if (made && !made.problems.length) this.toast(made.isNew ? `${made.part.name} is in the library: click where it goes.` : `${made.part.name} is changed everywhere it is placed.`);
+  }
+
+  private drawCircuit(): void {
+    this.circuit.draw();
+    this.coordsEl.textContent = this.circuit.coords();
+    this.hintEl.textContent = this.hintOverride ?? this.circuit.hint();
+    if (this.chromeDirty) {
+      this.chromeDirty = false;
+      this.circuit.drawPanel();
+      this.updateButtons();
+    }
+  }
+
   private drawPlot(): void {
     this.plots.draw();
     this.coordsEl.textContent = this.plots.coords();
@@ -999,6 +1152,7 @@ export class App {
       case "fill": return `Click inside a closed shape to fill it. ${done}`;
       case "hatch": return `Click a line, arc or circle, on the side the hatching should go. ${done}`;
       case "datum": return `Click where the datum point goes: a joint, a spot on a curve, or anywhere. ${done}`;
+      case "cpin": return `Click where a wire is attached: a point on the edge of the part. Pins of one connector share its name, set in the panel. ${done}`;
       case "dimension":
         return this.canApply("dimension")
           ? "Middle-click, or click empty space, where the dimension should go. Its position picks aligned, horizontal or vertical."
@@ -2451,6 +2605,24 @@ export class App {
         : addSymbol(this.sk, { type: "fill", color: this.fillColor, points: region.face.points, arcs: region.face.arcs, curves: region.face.curves, holes: region.holes, ...look });
       this.selection = new Set([f.id]);
       return this.commit();
+    }
+
+    if (tool === "cpin") {
+      const snap = this.snapAt(sp);
+      const autos: ConstraintDraft[] = [];
+      const at = this.materialize(snap, autos, true);
+      const existing = this.sk.symbols.find((x): x is Datum => x.type === "datum" && x.at === at);
+      if (existing) {
+        this.selection = new Set([existing.id]);
+        return this.toast(existing.pin ? "That point is a pin already." : "That point is a datum point: pick another one for the pin.");
+      }
+      const pins = this.sk.symbols.filter((x): x is Datum => x.type === "datum" && !!x.pin);
+      let k = pins.length + 1;
+      while (pins.some((x) => x.label === String(k))) k++;
+      const d = addSymbol(this.sk, { type: "datum", at, color: PIN_COLOR, label: String(k), dx: DATUM_LABEL_OFFSET[0], dy: DATUM_LABEL_OFFSET[1], pin: true, port: this.pinPort });
+      this.finishDrawing(autos);
+      this.selection = new Set([d.id]);
+      return;
     }
 
     if (tool === "datum" || tool === "mass") {
@@ -4062,7 +4234,11 @@ export class App {
    * anything can show, which Mech Sketch opens again with everything in it.
    */
   private async save(): Promise<void> {
+    if (this.partEdit) return this.toast("Finish the part first: press Done, or Cancel.");
     const packed = await packDrawing(JSON.stringify(this.whole()));
+    if (CIRCUIT_PAGE) {
+      return void this.saveAs(svgWithDrawing(this.circuit.exported("svg") ?? EMPTY_SVG, packed), ".svg", "image/svg+xml", "Mech Sketch wiring guide (SVG)", "circuit");
+    }
     void this.saveAs(svgWithDrawing(toSvg(this.figureSketch()) ?? EMPTY_SVG, packed), ".svg", "image/svg+xml", "Mech Sketch drawing (SVG)", "sketch");
   }
 
@@ -4081,16 +4257,16 @@ export class App {
    * pick a folder, so the name is asked for here and the file is downloaded
    * to wherever the browser puts downloads.
    */
-  private async saveAs(text: string, ext: string, mime: string, what: string, slot: SaveSlot = "figure"): Promise<void> {
-    // A plot is offered its own name each time; the other two remember the name used last.
-    const last = slot === "sketch" ? this.sketchName : slot === "plot" ? this.plots.fileName() : this.exportName;
+  private async saveAs(text: string, ext: string, mime: string, what: string, slot: SaveSlot = "figure", name?: string): Promise<void> {
+    // A plot and a guide are offered their own name each time; the other two remember the name used last.
+    const last = name ?? (slot === "sketch" && !CIRCUIT_PAGE ? this.sketchName : slot === "plot" ? this.plots.fileName() : slot === "circuit" || CIRCUIT_PAGE ? this.circuit.fileName() : this.exportName);
     const clean = (name: string) => {
       let base = name.trim().replace(/[\\/:*?"<>|\u0000-\u001f]/g, "");
       if (base.toLowerCase().endsWith(ext)) base = base.slice(0, -ext.length);
       return base.replace(/[. ]+$/, "");
     };
     const remember = (base: string) => {
-      if (slot === "plot") return;
+      if (slot === "plot" || slot === "circuit" || CIRCUIT_PAGE) return;
       if (slot === "sketch") this.sketchName = base;
       else this.exportName = base;
       try { localStorage.setItem(slot === "sketch" ? SKETCH_NAME_KEY : EXPORT_NAME_KEY, base); } catch { /* storage unavailable */ }
@@ -4183,8 +4359,11 @@ export class App {
   private async exportFigure(how: "svg" | "tikz" | "copy-tikz"): Promise<void> {
     // Each workspace exports what it shows: the figure, or the plot.
     const plotting = this.tab === "plot";
-    let text = plotting ? this.plots.exported(how === "svg" ? "svg" : "tikz") : how === "svg" ? toSvg(this.figureSketch()) : toTikz(this.figureSketch());
-    if (!text) return this.toast(plotting ? "There is no plot to export yet." : "There is nothing to export yet.");
+    const wiring = this.tab === "circuit";
+    let text = plotting ? this.plots.exported(how === "svg" ? "svg" : "tikz")
+      : wiring ? this.circuit.exported(how === "svg" ? "svg" : "tikz")
+        : how === "svg" ? toSvg(this.figureSketch()) : toTikz(this.figureSketch());
+    if (!text) return this.toast(plotting ? "There is no plot to export yet." : wiring ? "There is nothing on the guide to export yet." : "There is nothing to export yet.");
     // A figure saved to a file carries its drawing, so opening the file brings back everything; a copy for pasting does not.
     if (!plotting && how !== "copy-tikz") {
       const packed = await packDrawing(JSON.stringify(this.whole()));
@@ -4192,7 +4371,7 @@ export class App {
     }
     const title = how === "svg" ? "Export SVG" : how === "tikz" ? "Export TikZ" : "Copy TikZ";
     if (!(await this.waitToExport(title, how === "copy-tikz" ? "Copy" : "Save"))) return;
-    const slot: SaveSlot = plotting ? "plot" : "figure";
+    const slot: SaveSlot = plotting ? "plot" : wiring ? "circuit" : "figure";
     if (how === "svg") return this.saveAs(text, ".svg", "image/svg+xml", "SVG image", slot);
     if (how === "tikz") return this.saveAs(text, ".tex", "text/x-tex", plotting ? "pgfplots picture" : "TikZ picture", slot);
     try {
@@ -4232,6 +4411,7 @@ export class App {
       this.commit();
       this.fit();
       if (this.tab === "plot") this.plots.fit();
+      if (this.tab === "circuit") this.circuit.fit();
     } catch (err) {
       this.toast(err instanceof SyntaxError ? "That file is not valid JSON." : (err as Error).message);
     }
@@ -4243,6 +4423,7 @@ export class App {
     this.view.h = Math.max(50, r.height);
     this.svg.setAttribute("viewBox", `0 0 ${this.view.w} ${this.view.h}`);
     this.plots.resize(this.view.w, this.view.h);
+    this.circuit.resize(this.view.w, this.view.h);
     this.render();
   }
 
@@ -4327,10 +4508,24 @@ export class App {
 
   // ---- chrome ---------------------------------------------------------------
 
-  private buildToolbars(): void {
-    $("#tabs").innerHTML = TABS.map((t) =>
+  /** The tabs on show: the sketcher's four, or on the Wiring page its workspace, and the sketcher's two while a part is drawn. */
+  private shownTabs(): Tab[] {
+    if (!CIRCUIT_PAGE) return TABS;
+    return this.partEdit ? ["sketch", "annotate"] : ["circuit"];
+  }
+
+  private buildTabs(): void {
+    $("#tabs").innerHTML = this.shownTabs().map((t) =>
       `<button type="button" role="tab" class="tab${t === "plot" ? " apart" : ""}" data-tab="${t}" id="tab-${t}" aria-controls="ribbon"${t === "plot" ? ` title="Plot functions: a workspace of its own beside the sketch"` : ""}>${TAB_NAMES[t]}</button>`,
-    ).join("");
+    ).join("") + (BETA && !CIRCUIT_PAGE ? `<a class="tab apart tab-link" href="../circuit/" title="Wiring guides for electronics projects: a page of its own, in the beta">Wiring</a>` : "") +
+      (CIRCUIT_PAGE && !this.partEdit ? `<a class="tab apart tab-link" href="../app/" title="The sketcher for mechanics figures">Sketcher</a>` : "");
+    const bar = $("#part-banner");
+    bar.hidden = !this.partEdit;
+    if (this.partEdit) $<HTMLInputElement>("#part-name").value = this.partEdit.name;
+  }
+
+  private buildToolbars(): void {
+    this.buildTabs();
     $("#view-actions").innerHTML =
       `<button type="button" class="icon-btn" data-act="undo" aria-label="Undo" title="Undo (Ctrl+Z)">${icon("undo")}</button>` +
       `<button type="button" class="icon-btn" data-act="redo" aria-label="Redo" title="Redo (Ctrl+Y)">${icon("redo")}</button>` +
@@ -4387,7 +4582,15 @@ export class App {
       bar.dataset.shown = "plot";
       return;
     }
-    const tools = TOOLS.filter((t) => t.tab === this.tab || t.tab === "both");
+    if (this.tab === "circuit") {
+      const bar = $("#ribbon");
+      bar.innerHTML = this.circuit.ribbonHtml();
+      bar.setAttribute("aria-labelledby", "tab-circuit");
+      bar.dataset.shown = "circuit";
+      return;
+    }
+    // The Pin tool is for parts of a wiring guide, drawn on the Wiring page.
+    const tools = TOOLS.filter((t) => (t.tab === this.tab || t.tab === "both") && (t.id !== "cpin" || CIRCUIT_PAGE));
     let html = "";
     let group: number | null = null;
     for (const t of tools) {
@@ -4405,20 +4608,25 @@ export class App {
   private setTab(tab: Tab): void {
     if (tab === this.tab) return;
     const was = this.tab;
-    if (tab === "plot") {
+    if (tab === "plot" || tab === "circuit") {
       // The sketch is left as it is, with nothing half done in it.
       if (this.tool !== "select") this.setTool("select");
       this.closeEditor();
       if (this.preview) this.setPreview(false);
     }
     this.tab = tab;
-    if (tab === "plot" || was === "plot") {
-      $("#app").dataset.workspace = tab === "plot" ? "plot" : "sketch";
+    const own = (t: Tab) => t === "plot" || t === "circuit";
+    if (own(tab) || own(was)) {
+      $("#app").dataset.workspace = own(tab) ? tab : "sketch";
       if (this.tip) this.closeTip();
     }
     if (tab === "plot") {
       this.plots.enter();
       this.showTip("plot");
+      return this.touch();
+    }
+    if (tab === "circuit") {
+      this.circuit.enter();
       return this.touch();
     }
     // A tool that lives on the other tab is put down.
@@ -4434,7 +4642,7 @@ export class App {
 
   private updateButtons(): void {
     // The Plot ribbon greys out what needs a plot, so it is drawn afresh each time.
-    if ($("#ribbon").dataset.shown !== this.tab || this.tab === "plot") this.buildRibbon();
+    if ($("#ribbon").dataset.shown !== this.tab || this.tab === "plot" || this.tab === "circuit") this.buildRibbon();
     document.querySelectorAll<HTMLButtonElement>("[data-tab]").forEach((b) => {
       b.setAttribute("aria-selected", String(b.dataset.tab === this.tab));
     });
@@ -4752,6 +4960,19 @@ export class App {
         html += rotate;
         break;
       case "datum":
+        if (s.pin) {
+          html += `<h2>Wire pin</h2>`;
+          html += text("Name", "sym-label", s.label, "As printed on the board: GND, 5V, Tx3, SDA. Its name sets the colour of its tag.", false);
+          html += text("Connector", "pin-port", s.port ?? "", "Pins with the same connector are one port: their wires run as one bundle, with the tags side by side. Leave empty for a pin on its own.", false);
+          const dir = s.dir ?? "";
+          html += `<div class="field"><span id="pin-dir">Wires leave</span><div class="segmented wrap" role="group" aria-labelledby="pin-dir">` +
+            ([["", "Nearest edge"], ["l", "Left"], ["r", "Right"], ["u", "Up"], ["d", "Down"]] as const).map(([v, name]) =>
+              `<button type="button" data-pindir="${v || "auto"}" aria-pressed="${dir === v}">${name}</button>`).join("") + `</div></div>`;
+          html += `<div class="field"><span id="pin-kind">Wired</span><div class="segmented" role="group" aria-labelledby="pin-kind">` +
+            `<button type="button" data-pinpad="0" aria-pressed="${!s.pad}">Plugged in, with a tag</button><button type="button" data-pinpad="1" aria-pressed="${!!s.pad}">Soldered on</button></div></div>`;
+          html += `<p class="muted note-block">Pins are left out of the drawing: on the guide, each has a tag with its name. A connector's pins are wired as one bundle.</p>`;
+          break;
+        }
         html += `<h2>${s.mass ? "Centre of mass" : "Datum point"}</h2>`;
         html += `<div class="field"><span id="mark-label">Marked with</span><div class="segmented" role="group" aria-labelledby="mark-label">` +
           `<button type="button" data-mass="0" aria-pressed="${!s.mass}">A dot</button><button type="button" data-mass="1" aria-pressed="${!!s.mass}">Centre of mass</button></div></div>`;
@@ -5030,6 +5251,12 @@ export class App {
     svg.addEventListener("auxclick", (e) => e.preventDefault());
     new ResizeObserver(() => this.resize()).observe(this.stage);
 
+    $<HTMLInputElement>("#part-name").addEventListener("input", (e) => {
+      if (this.partEdit) this.partEdit.name = (e.target as HTMLInputElement).value.trim() || "Part";
+    });
+    $<HTMLInputElement>("#part-name").addEventListener("keydown", (e) => {
+      if (e.key === "Enter") (e.target as HTMLInputElement).blur();
+    });
     document.addEventListener("click", (e) => {
       const btn = (e.target as Element).closest<HTMLElement>("button");
       const menuBtn = btn?.dataset.menu ? btn : null;
@@ -5044,6 +5271,17 @@ export class App {
       // A click made from the keyboard (detail 0) moves focus into the menu.
       if (menuBtn) return this.setMenu(menuBtn, menuBtn.getAttribute("aria-expanded") !== "true", e.detail === 0);
       if (ds.pact) return this.plots.act(ds.pact, ds);
+      if (ds.cact) return this.circuit.act(ds.cact, ds);
+      if (ds.pindir) return this.editSymbol((x) => {
+        if (x.type !== "datum") return;
+        if (ds.pindir === "auto") delete x.dir;
+        else x.dir = ds.pindir as "l" | "r" | "u" | "d";
+      });
+      if (ds.pinpad) return this.editSymbol((x) => {
+        if (x.type !== "datum") return;
+        if (ds.pinpad === "1") x.pad = true;
+        else delete x.pad;
+      });
       if (ds.tab) this.setTab(ds.tab as Tab);
       else if (ds.tool) this.setTool(ds.tool as Tool);
       else if (ds.cmd) this.activate(ds.cmd as Command);
@@ -5143,6 +5381,7 @@ export class App {
 
     this.panel.addEventListener("change", (e) => {
       if (this.tab === "plot") return this.plots.change(e.target as HTMLInputElement | HTMLSelectElement);
+      if (this.tab === "circuit") return this.circuit.change(e.target as HTMLInputElement);
       const input = e.target as HTMLInputElement;
       if (input.dataset.num) return this.onSliderNumber(input.dataset.num, input.value);
       this.onPanelChange(input);
@@ -5151,6 +5390,7 @@ export class App {
       const input = e.target as HTMLInputElement;
       // A plot follows its fields as they are typed in; a list of choices acts when one is chosen.
       if (this.tab === "plot") { if (input.tagName !== "SELECT") this.plots.change(input, true); return; }
+      if (this.tab === "circuit") { if (input.type !== "color") this.circuit.change(input, true); return; }
       if (input.type === "range") this.onPanelChange(input, true);
     });
     this.panel.addEventListener("dblclick", (e) => {
@@ -5264,7 +5504,9 @@ export class App {
     switch (act) {
       case "undo": return this.undo();
       case "redo": return this.redo();
-      case "fit": return this.tab === "plot" ? this.plots.fit() : this.fit();
+      case "fit": return this.tab === "plot" ? this.plots.fit() : this.tab === "circuit" ? this.circuit.fit() : this.fit();
+      case "part-done": return this.finishPartEdit(true);
+      case "part-cancel": return this.finishPartEdit(false);
       case "new": return this.newSketch();
       case "break-ref": return this.breakLinks([...this.selection]);
       case "open": return this.fileInput.click();
@@ -5328,10 +5570,10 @@ export class App {
         return this.commit();
       }
       case "preview":
-        if (this.tab === "plot") return;
+        if (this.tab === "plot" || this.tab === "circuit") return;
         return this.setPreview(!this.preview);
       case "origin":
-        if (this.tab === "plot") return;
+        if (this.tab === "plot" || this.tab === "circuit") return;
         this.sk.showOrigin = !this.sk.showOrigin;
         return this.commit();
     }
@@ -5781,6 +6023,12 @@ export class App {
         if (!input.value.trim()) { this.toast("A note needs some text. Delete removes it."); return this.touch(); }
         s.text = input.value.trim();
       }
+      else if (s.type === "datum" && s.pin && field === "sym-label") s.label = input.value.trim();
+      else if (s.type === "datum" && s.pin && field === "pin-port") {
+        const port = input.value.trim();
+        if (port) { s.port = port; this.pinPort = port; }
+        else delete s.port;
+      }
       else if ((s.type === "datum" || isLoad(s) || s.type === "etalon") && field === "sym-label") s.label = label;
       else if (s.type === "etalon" && field === "sym-length") {
         if (!(v > 0)) { this.toast("The length is a number above zero, in the drawing's units."); return this.touch(); }
@@ -6060,13 +6308,14 @@ export class App {
     const typing = textInput || target.tagName === "TEXTAREA" || target.isContentEditable;
     const mod = e.ctrlKey || e.metaKey;
 
+    if (mod && !typing && this.tab === "circuit" && this.circuit.key(e)) { e.preventDefault(); return; }
     if (mod && !typing) {
       const k = e.key.toLowerCase();
       if (k === "z") { e.preventDefault(); return e.shiftKey ? this.redo() : this.undo(); }
       if (k === "y") { e.preventDefault(); return this.redo(); }
       if (k === "s") { e.preventDefault(); return void this.save(); }
       if (k === "o") { e.preventDefault(); return this.fileInput.click(); }
-      if (k === "a" && this.tab !== "plot") {
+      if (k === "a" && this.tab !== "plot" && this.tab !== "circuit") {
         e.preventDefault();
         this.setTool("select");
         this.selection = new Set([
@@ -6085,6 +6334,10 @@ export class App {
     if (this.tab === "plot") {
       // The sketcher's shortcuts are for the sketcher; the plot has a few of its own.
       if (this.plots.key(e)) e.preventDefault();
+      return;
+    }
+    if (this.tab === "circuit") {
+      if (this.circuit.key(e)) e.preventDefault();
       return;
     }
     if (e.code === "Space") {

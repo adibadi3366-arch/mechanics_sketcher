@@ -347,7 +347,7 @@ export function drawPrims(s: PrimScene): string {
     if (p.k === "text") {
       const b = textBox(p);
       const topLeft = M([b.x0, b.y1]);
-      let glyphs = engine.svg(p.tex, topLeft[0], topLeft[1], PAPER.em * pxPerMm, cls);
+      let glyphs = engine.svg(p.tex, topLeft[0], topLeft[1], (p.size ?? PAPER.em) * pxPerMm, cls);
       // Its colour goes in as a variable on a group around it, so the highlight rules still win.
       if (p.ink && glyphs) glyphs = `<g style="--ink:${p.ink}">${glyphs}</g>`;
       if (p.rot && glyphs) {
