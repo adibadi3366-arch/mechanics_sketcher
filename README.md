@@ -23,9 +23,9 @@ in the source): it has the solver and fonts inlined, so it also opens straight
 from disk by double-click. In development the landing page is at `/` and the
 app at `/app/`.
 
-Someone who has used the app before (there is a saved sketch in the browser),
-or who opens it as an installed app, is sent from the landing page straight to
-the app; `/?home` shows the landing page anyway.
+In a browser everyone gets the landing page and opens the app from it. Opened
+as an installed app, the site goes straight to the app; `/?home` shows the
+landing page there too.
 
 The landing page's pictures come from the app itself, so they can be made
 again after it changes: with `npx vite --port 5174` running, `node

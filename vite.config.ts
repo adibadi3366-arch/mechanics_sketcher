@@ -60,14 +60,13 @@ function betaPage(): Plugin {
  * Sketch is, with the app itself one level down, in app/. It is written in
  * landing/index.html; its pictures, styles and script are in public/landing.
  * Here the app's icons are put in where it names them ({{icon:name}}), and the
- * beta gets its own name, icon and saved-sketch key, and is kept out of search.
+ * beta gets its own name and icon, and is kept out of search.
  */
 function landingPage(): Plugin {
   const page = () => {
     const beta = process.env.VITE_CHANNEL === "beta";
     let html = readFileSync(fileURLToPath(new URL("./landing/index.html", import.meta.url)), "utf8")
-      .replace(/\{\{icon:([a-z]+)\}\}/g, (_, name: string) => icon(name, 28))
-      .replace("{{autosave}}", beta ? "mech-sketch-beta.autosave" : "mech-sketch.autosave");
+      .replace(/\{\{icon:([a-z]+)\}\}/g, (_, name: string) => icon(name, 28));
     if (beta) {
       html = html
         .replace("<head>", `<head>\n<meta name="robots" content="noindex">`)

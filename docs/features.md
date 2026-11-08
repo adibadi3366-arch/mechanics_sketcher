@@ -239,7 +239,7 @@ What was tried out in the beta until then; all of it is in the live app.
 
 The site's address now opens a home page; the app itself is at `app/`.
 
-- **A landing page:** the address of the site opens a page that says what Mech Sketch is, with an animated example, the four steps, a TikZ export set by LaTeX, what it draws, and questions. The app moves to `app/` under it. Anyone who has used the app before, or opens it as an installed app, goes straight to the app; `?home` shows the page anyway.
+- **A landing page:** the address of the site opens a page that says what Mech Sketch is, with an animated example, the four steps, a TikZ export set by LaTeX, what it draws, and questions. The app moves to `app/` under it. In a browser everyone sees it and opens the app from it; opened as an installed app, the site goes straight to the app.
 - **A disclaimer:** a notice in the landing page's opening says "Mostly vibe-coded"; the footer and the questions say a little more.
 - **A demo video** on the landing page, under the opening: a truss drawn, constrained, dimensioned, annotated and exported in the app, then set by LaTeX. It plays muted while on screen.
 

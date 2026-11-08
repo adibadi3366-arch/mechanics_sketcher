@@ -4,14 +4,14 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <script>
-  // Someone who already uses the app, or opens it as an installed app, goes
-  // straight to it. ?home shows this page anyway.
+  // Opened as an installed app, it goes straight to the app; in a browser
+  // everyone sees this page and opens the app from it. ?home shows this
+  // page in the installed app too.
   (function () {
     try {
       if (/[?&]home(=|&|$)/.test(location.search)) return;
-      var installed = window.matchMedia("(display-mode: standalone)").matches || navigator.standalone === true;
-      if (installed || localStorage.getItem("{{autosave}}")) location.replace("app/" + location.hash);
-    } catch (e) { /* storage unavailable: stay here */ }
+      if (window.matchMedia("(display-mode: standalone)").matches || navigator.standalone === true) location.replace("app/" + location.hash);
+    } catch (e) { /* stay here */ }
   })();
 </script>
 <title>Mech Sketch – draw truss and beam figures, export TikZ and SVG</title>
