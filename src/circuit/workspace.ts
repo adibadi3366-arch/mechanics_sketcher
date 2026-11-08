@@ -42,7 +42,7 @@ export interface CircuitHost {
   save(text: string, ext: string, mime: string, what: string, name: string): void;
 }
 
-type Tool = "select" | "wire" | "bundle" | "text" | "place";
+type Tool = "select" | "wire" | "bundle" | "text" | "place" | "cut";
 
 type Sel =
   | { kind: "devices"; ids: string[] }
@@ -65,7 +65,9 @@ type Drag =
   | { kind: "move"; start: V; from: { id: string; x: number; y: number }[]; grabbed: string; moved: boolean; click: Sel }
   | { kind: "segment"; key: string; index: number; axis: "h" | "v"; start: V; base: number[]; moved: boolean; click: Sel }
   | { kind: "text"; id: string; start: V; from: V; moved: boolean }
-  | { kind: "caption"; id: string; start: V; from: V; moved: boolean };
+  | { kind: "caption"; id: string; start: V; from: V; moved: boolean }
+  /** A stroke dragged with the Cut tool: what it crosses is taken out when it is let go. */
+  | { kind: "cut"; pts: V[]; hits: Set<string>; start: V };
 
 /** Screen pixels per mm the guide is drawn at inside its group; zoom scales the group. */
 const B = 20;
@@ -77,6 +79,22 @@ const NONE = new Set<string>();
 const WORLD = { cx: 0, cy: 0, scale: B, w: 0, h: 0 };
 /** The paper round the guide on export, in mm of the guide. */
 const MARGIN = 3;
+
+/** How far apart two stretches are: 0 where they cross. */
+function segDist(a: V, b: V, c: V, d: V): number {
+  const cr = (o: V, p: V, q: V) => (p[0] - o[0]) * (q[1] - o[1]) - (p[1] - o[1]) * (q[0] - o[0]);
+  const d1 = cr(a, b, c), d2 = cr(a, b, d), d3 = cr(c, d, a), d4 = cr(c, d, b);
+  if (((d1 > 0 && d2 < 0) || (d1 < 0 && d2 > 0)) && ((d3 > 0 && d4 < 0) || (d3 < 0 && d4 > 0))) return 0;
+  return Math.min(distToPolyline(a, [c, d]), distToPolyline(b, [c, d]), distToPolyline(c, [a, b]), distToPolyline(d, [a, b]));
+}
+
+/** How far apart grid dots are, in mm, for dots about 22 px apart on screen. */
+function gridStep(pxPerMm: number): number {
+  const target = 22 / pxPerMm;
+  const pow = Math.pow(10, Math.floor(Math.log10(target)));
+  for (const m of [1, 2, 5, 10]) if (m * pow >= target) return m * pow;
+  return 10 * pow;
+}
 
 /** The primitives as SVG markup in the coordinates of the guide's group. */
 function markup(prims: Prim[]): string {
@@ -126,9 +144,14 @@ export class CircuitWorkspace {
   private bounds: Box = { x0: -50, y0: -50, x1: 50, y1: 50 };
   private partSvg = new Map<string, string>();
   private focusNext: string | null = null;
+  /** The final view: the guide on its paper, as it is exported, with nothing else drawn and nothing to edit. */
+  private preview = false;
+  private viewBefore: { cx: number; cy: number; scale: number } | null = null;
   private file = document.createElement("input");
   private fileKind: "csv" | "part" = "csv";
   private world: SVGGElement;
+  /** The grid while drawing, the desk in the final view: behind the guide, in screen pixels. */
+  private backdrop: SVGGElement;
   private groups: Record<keyof CircuitWorkspace["layers"] | "overlay", SVGGElement>;
 
   constructor(private host: CircuitHost, private svg: SVGSVGElement, private panel: HTMLElement, private empty: HTMLElement) {
@@ -137,6 +160,8 @@ export class CircuitWorkspace {
     const make = (cls: string) => { const g = document.createElementNS(ns, "g"); g.setAttribute("class", cls); return g; };
     this.groups = { page: make("cw-pagegroup"), under: make("cw-under"), parts: make("cw-parts"), over: make("cw-over"), tags: make("cw-tags"), text: make("cw-text"), overlay: make("cw-overlay") };
     for (const k of ["page", "under", "parts", "over", "tags", "text"] as const) this.world.appendChild(this.groups[k]);
+    this.backdrop = make("cw-backdrop");
+    svg.appendChild(this.backdrop);
     svg.appendChild(this.world);
     svg.appendChild(this.groups.overlay);
     svg.addEventListener("pointerdown", (e) => this.onDown(e));
@@ -201,7 +226,9 @@ export class CircuitWorkspace {
   fit(): void {
     this.refresh();
     const c = this.c();
-    const b = c.devices.length || c.texts.length ? this.bounds : { x0: -60, y0: -45, x1: 60, y1: 45 };
+    const g = this.bounds;
+    const b = !(c.devices.length || c.texts.length) ? { x0: -60, y0: -45, x1: 60, y1: 45 }
+      : this.preview ? { x0: g.x0 - MARGIN, y0: g.y0 - MARGIN - 6, x1: g.x1 + MARGIN, y1: g.y1 + MARGIN } : g;
     const [w, h] = this.size;
     const pad = 40;
     this.view.scale = Math.max(0.5, Math.min(40, Math.min((w - 2 * pad) / Math.max(1, b.x1 - b.x0), (h - 2 * pad - 20) / Math.max(1, b.y1 - b.y0))));
@@ -235,8 +262,10 @@ export class CircuitWorkspace {
     }).join("");
     this.bounds = boundsOf([...g.under, ...g.over, ...g.tags, ...g.text], this.L.devices.map((d) => d.box));
     const b = this.bounds;
-    const page = Number.isFinite(b.x0)
-      ? `<rect class="cw-page" x="${n2((b.x0 - MARGIN) * B)}" y="${n2(-(b.y1 + MARGIN) * B)}" width="${n2((b.x1 - b.x0 + 2 * MARGIN) * B)}" height="${n2((b.y1 - b.y0 + 2 * MARGIN) * B)}"/>`
+    // The paper is drawn only in the final view, with its margin dashed inside it.
+    const page = Number.isFinite(b.x0) && this.preview
+      ? `<rect class="page" x="${n2((b.x0 - MARGIN) * B)}" y="${n2(-(b.y1 + MARGIN) * B)}" width="${n2((b.x1 - b.x0 + 2 * MARGIN) * B)}" height="${n2((b.y1 - b.y0 + 2 * MARGIN) * B)}"/>` +
+        `<rect class="page-margin" vector-effect="non-scaling-stroke" x="${n2(b.x0 * B)}" y="${n2(-b.y1 * B)}" width="${n2((b.x1 - b.x0) * B)}" height="${n2((b.y1 - b.y0) * B)}"/>`
       : "";
     const next = { page, under: markup(g.under), parts, over: markup(g.over), tags: markup(g.tags), text: markup(g.text) };
     // Only the layers that changed are put on the page again: moving one part leaves the others as they are.
@@ -264,8 +293,59 @@ export class CircuitWorkspace {
     this.refresh();
     const [w, h] = this.size, z = this.view.scale;
     this.world.setAttribute("transform", `translate(${n2(w / 2 - this.view.cx * z)} ${n2(h / 2 + this.view.cy * z)}) scale(${(z / B).toFixed(5)})`);
-    this.groups.overlay.innerHTML = this.overlay();
+    this.backdrop.innerHTML = this.backdropHtml();
+    this.groups.overlay.innerHTML = this.preview ? this.previewOverlay() : this.overlay();
     this.svg.dataset.over = this.cursorKind();
+    this.svg.classList.toggle("cw-final", this.preview);
+  }
+
+  /** Behind the guide: white with a grid of dots while drawing, as in the sketcher; the desk in the final view. */
+  private backdropHtml(): string {
+    const [w, h] = this.size;
+    if (this.preview) return `<rect class="sheet desk" width="${w}" height="${h}"/>`;
+    const z = this.view.scale;
+    const step = gridStep(z) * z;
+    const o = this.toScreen([0, 0]);
+    const ox = ((o[0] % step) + step) % step - step / 2, oy = ((o[1] % step) + step) % step - step / 2;
+    return `<rect class="sheet" width="${w}" height="${h}"/>` +
+      `<defs><pattern id="cw-grid" width="${n2(step)}" height="${n2(step)}" patternUnits="userSpaceOnUse" x="${n2(ox)}" y="${n2(oy)}">` +
+      `<circle class="grid-dot" cx="${n2(step / 2)}" cy="${n2(step / 2)}" r="0.9"/></pattern></defs>` +
+      `<rect width="${w}" height="${h}" fill="url(#cw-grid)"/>`;
+  }
+
+  /** In the final view, only the size the guide comes out on paper, under it. */
+  private previewOverlay(): string {
+    const b = this.bounds, c = this.c();
+    if (!Number.isFinite(b.x0) || !(c.devices.length || c.texts.length)) return "";
+    const bottom = this.toScreen([(b.x0 + b.x1) / 2, b.y0 - MARGIN]);
+    const k = c.look.scale;
+    return `<text class="page-size" x="${n2(bottom[0])}" y="${n2(Math.min(this.size[1] - 8, bottom[1] + 20))}" text-anchor="middle">${shown(((b.x1 - b.x0 + 2 * MARGIN) * k) / 10)} × ${shown(((b.y1 - b.y0 + 2 * MARGIN) * k) / 10)} cm, ${shown(k)} × its size in mm, with a ${shown(MARGIN * k)} mm margin</text>`;
+  }
+
+  get previewing(): boolean {
+    return this.preview;
+  }
+
+  /**
+   * Switches the final view on or off. Going in, the view is fitted to the
+   * paper; coming back, it returns to where it was.
+   */
+  setPreview(on: boolean): void {
+    if (on === this.preview) return;
+    this.preview = on;
+    this.stale = true;
+    this.drag = null;
+    this.hover = { kind: "none" };
+    if (on) {
+      this.from = null;
+      if (this.tool !== "select") { this.tool = "select"; this.placing = null; }
+      this.viewBefore = { ...this.view };
+      this.fit();
+    } else if (this.viewBefore) {
+      Object.assign(this.view, this.viewBefore);
+      this.viewBefore = null;
+    }
+    this.host.touch();
   }
 
   /** What is drawn over the guide while working: what is selected and pointed at, the wire being drawn, the part being placed. */
@@ -280,12 +360,12 @@ export class CircuitWorkspace {
       return `<rect class="${cls}" x="${n2(a[0] - grow)}" y="${n2(a[1] - grow)}" width="${n2(d[0] - a[0] + 2 * grow)}" height="${n2(d[1] - a[1] + 2 * grow)}" rx="4"/>`;
     };
     let out = "";
-    // The size the guide comes out on paper, under it.
-    const b = this.bounds;
-    if (Number.isFinite(b.x0) && (c.devices.length || c.texts.length)) {
-      const bottom = S([(b.x0 + b.x1) / 2, b.y0 - MARGIN]);
-      const k = c.look.scale;
-      out += `<text class="cw-size" x="${n2(bottom[0])}" y="${n2(bottom[1] + 18)}" text-anchor="middle">${shown(((b.x1 - b.x0 + 2 * MARGIN) * k) / 10)} × ${shown(((b.y1 - b.y0 + 2 * MARGIN) * k) / 10)} cm on paper</text>`;
+    // While drawing, each device shows the name the wires and the connection list know it by.
+    for (const d of L.devices) {
+      const at = S([d.box.x0, d.box.y1]);
+      const label = esc(d.dev.name);
+      const wpx = d.dev.name.length * 6.1 + 10;
+      out += `<g class="cw-name" transform="translate(${n2(at[0])} ${n2(at[1] - 17)})"><rect width="${n2(wpx)}" height="15" rx="3"/><text x="5" y="11">${label}</text></g>`;
     }
     const wireLine = (id: string): { line: V[]; width: number } | null => {
       for (const bd of L.bundles) {
@@ -372,6 +452,15 @@ export class CircuitWorkspace {
         out += `<g class="cw-ghost" transform="${t}">${this.partMarkup(part, this.placing.flip)}</g>`;
       }
     }
+    // The Cut tool: the wire under the pointer, or the stroke being dragged and what it crosses.
+    if (this.tool === "cut") {
+      const cutting = this.drag?.kind === "cut" ? this.drag : null;
+      const ids = cutting ? cutting.hits : new Set(hv.kind === "wire" ? [hv.id] : []);
+      for (const bd of L.bundles) bd.wires.forEach((w, i) => {
+        if (ids.has(w.id)) out += `<path class="cw-wire-cut" d="${pathD(bd.lines[i])}" style="stroke-width:${n2(Math.max(5, (bd.width + 0.9) * z))}px"/>`;
+      });
+      if (cutting && cutting.pts.length > 1) out += `<path class="cw-cut" d="${cutting.pts.map((p, i) => `${i ? "L" : "M"}${n2(p[0])} ${n2(p[1])}`).join("")}"/>`;
+    }
     // The box being dragged out.
     if (this.drag?.kind === "box") {
       const a = this.drag.a, d = this.drag.b;
@@ -422,6 +511,8 @@ export class CircuitWorkspace {
     if (d?.kind === "pan" && d.moved) return "grab";
     if (d?.kind === "move" || d?.kind === "text" || d?.kind === "caption") return "move";
     if (d?.kind === "segment") return d.axis === "h" ? "ns" : "ew";
+    if (this.preview) return d?.kind === "pan" && d.moved ? "grab" : "pan";
+    if (this.tool === "cut") return "cut";
     if (this.tool === "place" || this.tool === "text") return "place";
     const h = this.hover;
     if (this.tool === "wire" || this.tool === "bundle") return h.kind === "pin" ? "pointer" : "pan";
@@ -431,6 +522,8 @@ export class CircuitWorkspace {
   }
 
   hint(): string {
+    if (this.preview) return "Final view: the guide on its paper, as it is exported. Press Q or Esc to go back to drawing.";
+    if (this.tool === "cut") return "Drag across wires to cut them out, or click one. Esc puts the tool down.";
     if (this.tool === "place") return "Click where the part goes. R turns it, F mirrors it; hold Shift to place more than one. Esc puts it down.";
     if (this.tool === "wire") return this.from ? `From ${describeEnd(this.c(), this.from)}: click the pin it goes to. Esc lets go.` : "Click a pin's tag, then the tag it is wired to.";
     if (this.tool === "bundle") return this.from ? `From port ${this.from.port} of ${deviceById(this.c(), this.from.dev)?.name ?? ""}: click a tag of the port it plugs into. Pins are paired by what they do.` : "Click a tag of one port, then a tag of the port it plugs into: every pin is wired to the one it goes with.";
@@ -439,7 +532,7 @@ export class CircuitWorkspace {
     if (h.kind === "wire") return "Click to select the wire, double-click for its whole bundle. Drag a middle stretch to lay the bundle another way.";
     if (h.kind === "device") return "Drag to move. R turns it, F mirrors it, Delete removes it with its wires.";
     if (h.kind === "pin") return `${describeEnd(this.c(), h.end)}: pick the Wire tool (W) to wire it.`;
-    return "Drag to move around, scroll to zoom; Shift-drag to select several. W wires two pins, B plugs two ports together, T adds text.";
+    return "Drag to move around, scroll to zoom; Shift-drag to select several. W wires two pins, B plugs two ports together, X cuts wires, Q shows the final view.";
   }
 
   coords(): string {
@@ -551,6 +644,15 @@ export class CircuitWorkspace {
       this.drag = { kind: "pan", last: sp, moved: false, start: sp, clear: false };
       return;
     }
+    // The final view is only looked at: dragging moves round it.
+    if (this.preview) {
+      this.drag = { kind: "pan", last: sp, moved: false, start: sp, clear: false };
+      return;
+    }
+    if (this.tool === "cut") {
+      this.drag = { kind: "cut", pts: [sp], hits: new Set(), start: sp };
+      return this.host.render();
+    }
     const q = this.toGuide(sp);
     if (this.tool === "place") return this.place(ev.shiftKey);
     if (this.tool === "text") {
@@ -620,7 +722,14 @@ export class CircuitWorkspace {
     const d = this.drag;
     const c = this.c();
     if (!d) {
-      this.hover = this.hit(sp);
+      this.hover = this.preview ? { kind: "none" } : this.hit(sp);
+      return this.host.render();
+    }
+    if (d.kind === "cut") {
+      const last = d.pts[d.pts.length - 1];
+      if (Math.hypot(sp[0] - last[0], sp[1] - last[1]) < 2) return;
+      d.pts.push(sp);
+      this.cutAlong(d, last, sp);
       return this.host.render();
     }
     const q = this.toGuide(sp);
@@ -706,6 +815,20 @@ export class CircuitWorkspace {
     this.drag = null;
     if (this.svg.hasPointerCapture(ev.pointerId)) this.svg.releasePointerCapture(ev.pointerId);
     if (!d) return;
+    if (d.kind === "cut") {
+      // A click cuts the wire under it.
+      if (!d.hits.size) {
+        const h = this.hit(this.screenPos(ev));
+        if (h.kind === "wire") d.hits.add(h.id);
+      }
+      if (!d.hits.size) return this.host.render();
+      const c = this.c();
+      const n = d.hits.size;
+      removeWires(c, d.hits);
+      if (this.sel?.kind === "wire" && d.hits.has(this.sel.id)) this.sel = null;
+      this.host.toast(`Cut ${n} wire${n === 1 ? "" : "s"}. Ctrl+Z puts ${n === 1 ? "it" : "them"} back.`);
+      return this.changed();
+    }
     if (d.kind === "pan") {
       if (!d.moved && d.clear) {
         if (this.from) this.from = null;
@@ -730,6 +853,22 @@ export class CircuitWorkspace {
     this.changed();
   }
 
+  /** The wires a stretch of the cut stroke crosses, or passes over. */
+  private cutAlong(d: Extract<Drag, { kind: "cut" }>, a: V, b: V): void {
+    this.refresh();
+    const ga = this.toGuide(a), gb = this.toGuide(b);
+    const tol = 2 / this.view.scale;
+    for (const bd of this.L!.bundles) {
+      bd.lines.forEach((line, i) => {
+        const id = bd.wires[i].id;
+        if (d.hits.has(id)) return;
+        for (let k = 0; k + 1 < line.length; k++) {
+          if (segDist(ga, gb, line[k], line[k + 1]) <= bd.width / 2 + tol) { d.hits.add(id); return; }
+        }
+      });
+    }
+  }
+
   private onWheel(ev: WheelEvent): void {
     ev.preventDefault();
     const sp = this.screenPos(ev);
@@ -744,7 +883,7 @@ export class CircuitWorkspace {
   }
 
   private onDoubleClick(ev: MouseEvent): void {
-    if (this.tool !== "select") return;
+    if (this.tool !== "select" || this.preview) return;
     const h = this.hit(this.screenPos(ev));
     if (h.kind === "wire") {
       this.sel = { kind: "bundle", key: h.key };
@@ -839,6 +978,7 @@ export class CircuitWorkspace {
   }
 
   setTool(t: Tool): void {
+    if (this.preview && t !== "select") this.setPreview(false);
     this.tool = t;
     this.from = null;
     if (t !== "place") this.placing = null;
@@ -912,6 +1052,12 @@ export class CircuitWorkspace {
       if (k === "d") { this.duplicateSelected(); return true; }
       return false;
     }
+    if (k === "q" || (this.preview && e.key === "Escape")) { this.setPreview(!this.preview); return true; }
+    if (this.preview) {
+      // Nothing is edited in the final view; the view itself can be fitted.
+      if (e.key === "0" || e.key === "Home") { this.fit(); return true; }
+      return false;
+    }
     if (e.key === "Escape") {
       if (this.from) this.from = null;
       else if (this.tool !== "select") { this.tool = "select"; this.placing = null; }
@@ -925,6 +1071,7 @@ export class CircuitWorkspace {
     if (k === "w") { this.setTool("wire"); return true; }
     if (k === "b") { this.setTool("bundle"); return true; }
     if (k === "t") { this.setTool("text"); return true; }
+    if (k === "x") { this.setTool("cut"); return true; }
     if (k === "r") { this.turnSelected(e.shiftKey ? -1 : 1); return true; }
     if (k === "f") { this.turnSelected(0, true); return true; }
     if (e.key.startsWith("Arrow") && this.sel) {
@@ -1031,6 +1178,7 @@ export class CircuitWorkspace {
       tool("tool-wire", "wire", "Wire", "Wire a pin to a pin: click a tag, then the tag it goes to (W)", on("wire")) +
       tool("tool-bundle", "plug", "Plug in", "Plug a port into a port: every pin is wired to the one it goes with (B)", on("bundle")) +
       tool("tool-text", "note", "Text", "Put text on the guide: a title, a note (T)", on("text")) +
+      tool("tool-cut", "trim", "Cut", "Cut wires: drag across them, and what the stroke crosses is taken out; or click one (X)", on("cut")) +
       `<span class="ribbon-rule"></span>` +
       tool("new-part", "partnew", "Draw part", "Draw a new part in the sketcher, with pins to wire to") +
       tool("import-part", "partin", "Import part", "Add a part from a component file (.json), such as one written from a photo of a board") +
@@ -1063,6 +1211,7 @@ export class CircuitWorkspace {
   private panelHtml(): string {
     const s = this.sel;
     const c = this.c();
+    if (this.preview) return this.finalHtml();
     if (this.tool === "place") return this.placeHtml();
     if (s?.kind === "devices" && s.ids.length === 1) return this.deviceHtml(deviceById(c, s.ids[0])!);
     if (s?.kind === "devices") return `<h2>${s.ids.length} parts</h2><p class="muted">Drag one to move them all; R turns each, Delete takes them out with their wires.</p>` +
@@ -1125,20 +1274,41 @@ export class CircuitWorkspace {
     html += `<p class="muted">A connection list is a CSV file with a row for each wire: from_device, from_port, from_pin, to_device, to_port, to_pin, colour, label. Parts it names that are not placed yet are placed.</p>`;
     html += `<div class="btn-row"><button type="button" class="plain" data-cact="csv-in">Import a list</button><button type="button" class="plain" data-cact="csv-out"${c.wires.length ? "" : " disabled"}>Export the list</button></div>`;
 
-    html += `<h3>Look</h3>`;
-    const look = c.look;
-    html += this.choice("Corners of bundles", "corners", [["round", "Rounded", look.corners === "round"], ["square", "Square", look.corners === "square"]]);
-    html += this.choice("Edge round each wire", "casing", [["on", "Darker edge", look.casing], ["off", "None", !look.casing]]);
-    html += this.choice("Pins with nothing wired", "unused", [["outline", "Outlined tags", look.unused === "outline"], ["hide", "No tags", look.unused === "hide"]]);
-    html += `<label class="field"><span>Wire thickness (mm)</span><input data-cf="look-wire" type="number" min="0.1" max="3" step="0.05" value="${look.wire}"></label>`;
-    html += `<label class="field"><span>Size on paper</span><span class="pair"><input data-cf="look-scale" type="number" min="0.2" max="20" step="0.1" value="${look.scale}" aria-label="Times its size in mm"><span>× its size in mm</span></span>` +
-      `<small>Tags are ${shown(TAG.w * look.scale)} mm tall on paper, their text ${shown(TAG.font * look.scale * 2.845)} pt. The export comes out this size.</small></label>`;
+    html += this.lookHtml();
     html += `<h3>Colours</h3><div class="cw-legend">${PIN_KINDS.slice(0, 12).map((k) => `<span><i style="background:${k.bg}"></i>${esc(k.label)}</span>`).join("")}</div>`;
     html += `<small class="under">A tag's colour is what its pin does, read from its name: GND, 5V, Tx, Rx, SCL, SDA and so on. A wire takes the colour of its first pin unless it is given its own.</small>`;
     if (!c.devices.length) {
       html += `<h3>Example</h3><p class="muted">A quadcopter on a MicoAir H743 v2: a flight controller, a 4-in-1 ESC, four motors, GPS, receiver, video transmitter and buzzer, wired.</p>` +
         `<button type="button" class="plain" data-cact="example">Open the example</button>`;
     }
+    return html;
+  }
+
+  /** The panel of the final view: the size on paper, how the guide looks, and the export. */
+  private finalHtml(): string {
+    const c = this.c();
+    const b = this.bounds;
+    let html = `<h2>Final view</h2><p class="muted">The guide as it is exported: on its paper, with a ${shown(MARGIN * c.look.scale)} mm margin, without the names and markers shown while drawing. Press Q or Esc to go back to drawing.</p>`;
+    if (Number.isFinite(b.x0) && (c.devices.length || c.texts.length)) {
+      const k = c.look.scale;
+      html += `<p class="cw-ends"><span>${shown(((b.x1 - b.x0 + 2 * MARGIN) * k) / 10)} × ${shown(((b.y1 - b.y0 + 2 * MARGIN) * k) / 10)} cm on paper</span></p>`;
+    }
+    html += this.lookHtml();
+    html += `<h3>Export</h3><div class="btn-row"><button type="button" class="plain" data-act="export-svg">SVG</button><button type="button" class="plain" data-act="export-tikz">TikZ</button><button type="button" class="plain" data-act="copy-tikz">Copy TikZ</button></div>`;
+    html += `<small class="under">Exported files carry the guide, so Open brings it back to edit.</small>`;
+    return html;
+  }
+
+  /** How the guide is drawn: the settings of the Look section. */
+  private lookHtml(): string {
+    const look = this.c().look;
+    let html = `<h3>Look</h3>`;
+    html += this.choice("Corners of bundles", "corners", [["round", "Rounded", look.corners === "round"], ["square", "Square", look.corners === "square"]]);
+    html += this.choice("Edge round each wire", "casing", [["on", "Darker edge", look.casing], ["off", "None", !look.casing]]);
+    html += this.choice("Pins with nothing wired", "unused", [["outline", "Outlined tags", look.unused === "outline"], ["hide", "No tags", look.unused === "hide"]]);
+    html += `<label class="field"><span>Wire thickness (mm)</span><input data-cf="look-wire" type="number" min="0.1" max="3" step="0.05" value="${look.wire}"></label>`;
+    html += `<label class="field"><span>Size on paper</span><span class="pair"><input data-cf="look-scale" type="number" min="0.2" max="20" step="0.1" value="${look.scale}" aria-label="Times its size in mm"><span>× its size in mm</span></span>` +
+      `<small>Tags are ${shown(TAG.w * look.scale)} mm tall on paper, their text ${shown(TAG.font * look.scale * 2.845)} pt. The export comes out this size.</small></label>`;
     return html;
   }
 
@@ -1238,6 +1408,8 @@ export class CircuitWorkspace {
       case "tool-wire": return this.setTool("wire");
       case "tool-bundle": return this.setTool("bundle");
       case "tool-text": return this.setTool("text");
+      case "tool-cut": return this.setTool("cut");
+      case "preview": return this.setPreview(!this.preview);
       case "fit": return this.fit();
       case "place": return this.startPlacing(ds.starter ? { starter: ds.starter } : { part: ds.id });
       case "new-part": return this.host.editPart(null);

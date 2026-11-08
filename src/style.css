@@ -780,7 +780,6 @@ image.picture { pointer-events: none; }
 #app[data-workspace="circuit"] #empty,
 #app[data-workspace="circuit"] #titleblock,
 #app[data-workspace="circuit"] #dim-editor,
-#app[data-workspace="circuit"] [data-act="preview"],
 #app[data-workspace="circuit"] [data-act="origin"] { display: none; }
 #app:not([data-workspace="circuit"]) #circuit-empty { display: none; }
 #app[data-workspace="circuit"] .sheets { visibility: hidden; }
@@ -794,8 +793,13 @@ image.picture { pointer-events: none; }
 #circuit-canvas[data-over="pointer"] { cursor: pointer; }
 #circuit-canvas[data-over="place"] { cursor: crosshair; }
 #circuit-canvas[data-over="pan"] { cursor: grab; }
-.cw-page { fill: #ffffff; filter: drop-shadow(0 1px 3px rgba(23, 32, 27, 0.22)); }
-.cw-size { font-size: 12px; fill: var(--ink-2); }
+#circuit-canvas[data-over="cut"] { cursor: crosshair; }
+/* While drawing, the name each device goes by; the stroke of the Cut tool and the wires it will take out. */
+.cw-name { pointer-events: none; }
+.cw-name rect { fill: rgba(255, 255, 255, 0.85); stroke: var(--rule); stroke-width: 1; }
+.cw-name text { font: 600 10.5px system-ui, -apple-system, "Segoe UI", sans-serif; fill: var(--ink-2); }
+.cw-cut { fill: none; stroke: var(--bad); stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; stroke-dasharray: 6 4; pointer-events: none; }
+.cw-wire-cut { fill: none; stroke: var(--bad); stroke-opacity: 0.5; stroke-linecap: round; stroke-linejoin: round; pointer-events: none; }
 .cw-hover { fill: none; stroke: var(--sel); stroke-width: 1.2; stroke-dasharray: 4 3; opacity: 0.8; pointer-events: none; }
 .cw-sel { fill: rgba(226, 87, 10, 0.05); stroke: var(--sel); stroke-width: 1.6; pointer-events: none; }
 .cw-wire-hover { fill: none; stroke: var(--sel); stroke-opacity: 0.28; stroke-linecap: round; stroke-linejoin: round; pointer-events: none; }

@@ -4652,7 +4652,7 @@ export class App {
     $<HTMLButtonElement>('[data-act="undo"]').disabled = !this.history.canUndo;
     $<HTMLButtonElement>('[data-act="redo"]').disabled = !this.history.canRedo;
     $<HTMLButtonElement>('[data-act="origin"]').setAttribute("aria-pressed", String(this.sk.showOrigin));
-    $<HTMLButtonElement>('[data-act="preview"]').setAttribute("aria-pressed", String(this.preview));
+    $<HTMLButtonElement>('[data-act="preview"]').setAttribute("aria-pressed", String(this.tab === "circuit" ? this.circuit.previewing : this.preview));
     document.querySelector('#ribbon [data-act="construction"]')?.setAttribute("aria-pressed", String(this.constructing));
   }
 
@@ -5570,7 +5570,8 @@ export class App {
         return this.commit();
       }
       case "preview":
-        if (this.tab === "plot" || this.tab === "circuit") return;
+        if (this.tab === "plot") return;
+        if (this.tab === "circuit") return this.circuit.setPreview(!this.circuit.previewing);
         return this.setPreview(!this.preview);
       case "origin":
         if (this.tab === "plot" || this.tab === "circuit") return;
