@@ -147,18 +147,31 @@
 })();
 
 // The demo video plays, muted, while it is on screen, and waits otherwise.
-// With reduced motion it waits for its play button.
+// With reduced motion it waits for its play button. The MP4 comes first: iPhones
+// say they may play WebM and then often cannot.
 (function () {
   const video = document.getElementById("demo");
   if (!video) return;
+  // Muted and inline, as iPhones need to start a video on their own.
+  video.muted = true;
+  video.defaultMuted = true;
+  video.playsInline = true;
   if (window.matchMedia("(prefers-reduced-motion: reduce)").matches || !("IntersectionObserver" in window)) return;
-  let paused = false;
-  video.addEventListener("pause", () => { if (!video.dataset.auto) paused = true; delete video.dataset.auto; });
-  video.addEventListener("play", () => { paused = false; });
+  // A pause the viewer asked for (a tap or a key on the video) holds until they play it again;
+  // pauses from scrolling away, or from the phone, do not.
+  let touched = 0, held = false;
+  for (const kind of ["pointerdown", "keydown"]) video.addEventListener(kind, () => { touched = Date.now(); });
+  video.addEventListener("pause", () => { if (Date.now() - touched < 1500) held = true; });
+  video.addEventListener("play", () => { held = false; });
+  let visible = false;
+  const start = () => { if (visible && !held && video.paused) video.play().catch(() => { /* Low Power Mode and the like: the play button is there */ }); };
   new IntersectionObserver((entries) => {
     for (const e of entries) {
-      if (e.isIntersecting && !paused) video.play().catch(() => {});
-      else if (!e.isIntersecting && !video.paused) { video.dataset.auto = "1"; video.pause(); }
+      visible = e.isIntersecting;
+      if (visible) start();
+      else if (!video.paused) video.pause();
     }
   }, { threshold: 0.35 }).observe(video);
+  // Back to the page with the video in view: on again.
+  document.addEventListener("visibilitychange", () => { if (!document.hidden) start(); });
 })();
