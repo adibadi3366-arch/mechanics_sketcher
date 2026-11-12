@@ -125,6 +125,11 @@ function cost(p: V[], us: V, ue: V, need: RouteNeeds): number {
  * is a single corner, or a straight run where the ends are in line.
  */
 export function autoRoute(s: V, us: V, e: V, ue: V, need: RouteNeeds): number[] {
+  return bestRoute(s, us, e, ue, need).places;
+}
+
+/** The same, with how bad the path found is. */
+export function bestRoute(s: V, us: V, e: V, ue: V, need: RouteNeeds): { places: number[]; cost: number } {
   const a = axisOf(us), b = axisOf(ue);
   const tries: number[][] = [];
   const along = (p: V, axis: Axis) => (axis === "h" ? p[0] : p[1]);
@@ -154,6 +159,27 @@ export function autoRoute(s: V, us: V, e: V, ue: V, need: RouteNeeds): number[] 
     if (!p) continue;
     const c = cost(tidyPath(p), us, ue, need);
     if (c < bestCost - 1e-9) { bestCost = c; best = t; }
+  }
+  return { places: best, cost: bestCost };
+}
+
+/** The four ways a wire can leave a point. */
+export const WAYS: V[] = [[1, 0], [-1, 0], [0, 1], [0, -1]];
+
+/**
+ * The best path where an end may leave more than one way, as at a junction of
+ * a circuit diagram: every pairing of the ways given is tried, those that
+ * point at the other end first, and the cheapest is kept with the ways it
+ * leaves by.
+ */
+export function freeRoute(s: V, usWays: V[], e: V, ueWays: V[], need: RouteNeeds): { us: V; ue: V; places: number[] } {
+  const towards = (from: V, to: V) => (x: V, y: V) => dot(y, sub(to, from)) - dot(x, sub(to, from));
+  const as = usWays.length > 1 ? [...usWays].sort(towards(s, e)) : usWays;
+  const bs = ueWays.length > 1 ? [...ueWays].sort(towards(e, s)) : ueWays;
+  let best = { us: as[0], ue: bs[0], places: [] as number[] }, bestCost = Infinity;
+  for (const us of as) for (const ue of bs) {
+    const r = bestRoute(s, us, e, ue, need);
+    if (r.cost < bestCost - 1e-9) { bestCost = r.cost; best = { us, ue, places: r.places }; }
   }
   return best;
 }

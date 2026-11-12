@@ -113,6 +113,10 @@ export const ICONS: Record<string, string> = {
   reroute: `<path d="M3 15.5h4.5a2 2 0 0 0 2-2v-7a2 2 0 0 1 2-2H17" stroke-width="1.5"/><path d="M3 12.5h2.5" stroke-width="1.5" stroke-dasharray="1.5 1.5"/><path d="M14.5 2l2.5 2.5-2.5 2.5" stroke-width="1.4"/>`,
   csvin: `<path d="M3 3.5h9.5l3 3V17H3z" stroke-width="1.3"/><path d="M5.5 9h7.5M5.5 11.8h7.5M5.5 14.5h7.5M9.2 7v9" stroke-width="1"/><path d="M19 1v5.5h-4.5" stroke-width="1.4"/>`,
   csvout: `<path d="M3 3.5h9.5l3 3V17H3z" stroke-width="1.3"/><path d="M5.5 9h7.5M5.5 11.8h7.5M5.5 14.5h7.5M9.2 7v9" stroke-width="1"/><path d="M14.5 1H19v4.5M19 1l-4.5 4.5" stroke-width="1.4"/>`,
+  // Back to the library: a chevron pointing left.
+  chevron: `<path d="M12.5 4l-6 6 6 6"/>`,
+  // The library's search field: a magnifying glass.
+  search: `<circle cx="8.5" cy="8.5" r="5"/><path d="M12.3 12.3L17 17"/>`,
   partout: `<rect x="2.5" y="6" width="10" height="10" rx="1.5"/><path d="M7.5 9v4M10 11H5" stroke-width="1.2"/><path d="M13 2.5h4.5V7M17.5 2.5L13 7" stroke-width="1.4"/>`,
   // Pin: a ring with a dot, where a wire is attached on a part.
   cpin: `<circle cx="10" cy="10" r="4.5" stroke-width="1.5"/>${dot(10, 10, 1.7)}<path d="M14.5 10h3" stroke-width="1.5"/>`,

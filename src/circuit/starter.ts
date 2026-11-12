@@ -1,11 +1,13 @@
 // The starter library: parts drawn ready to place, at the detail a manual
-// shows them, and an example guide that wires them into a quadcopter. Each is
-// a list of shapes, as a component file has them, so a part taken from here
-// is saved in the drawing like any other.
+// shows them, with the circuit symbols and logic gates of symbols.ts, and two
+// examples: a guide that wires a quadcopter, and a small circuit diagram.
+// Each part is a list of shapes, as a component file has them, so a part
+// taken from here is saved in the drawing like any other.
 
 import type { Shape, PartDef, PortDef, Side, Circuit, Device, Wire, GuideText, ConnectorStyle } from "./model";
 import { newCircuit, bundleKey } from "./model";
 import { C, CONNECTOR, connectorPins } from "./art";
+import { SYMBOLS } from "./symbols";
 
 type S = Shape[];
 const r = (x: number, y: number, w: number, h: number, o: Partial<Extract<Shape, { type: "rect" }>> = {}): Shape => ({ type: "rect", x, y, w, h, ...o });
@@ -245,36 +247,68 @@ function sensor(): PartDef {
   return { id: "", name: "I²C sensor board", ref: "Sensor", caption: "I²C sensor", w: W, h: H, shapes: s, ports: [plug("I2C", "bottom", 10, H, ["VCC", "GND", "SCL", "SDA"], "header")], starter: "i2c-sensor" };
 }
 
+/** A part of the starter library: where the library lists it, and what a search finds it by. */
+export interface StarterEntry {
+  key: string;
+  cat: "boards" | "symbols" | "logic";
+  group: string;
+  /** For a logic gate: the shape it is drawn in, the IEC box or the American outline. */
+  style?: "iec" | "ansi";
+  words: string;
+  make: () => PartDef;
+}
+
+/** The sections of the library. */
+export const CATEGORIES: { id: StarterEntry["cat"]; name: string; note: string }[] = [
+  { id: "boards", name: "Boards and modules", note: "Pictures of parts, for wiring guides" },
+  { id: "symbols", name: "Circuit symbols", note: "For circuit diagrams, as European textbooks draw them (IEC)" },
+  { id: "logic", name: "Logic gates", note: "Gates and flip-flops, as IEC boxes or American outlines" },
+];
+
+const board = (key: string, group: string, words: string, make: () => PartDef): StarterEntry => ({ key, cat: "boards", group, words, make });
+
 /** The starter parts, in the order the library lists them. */
-export const STARTER: { key: string; make: () => PartDef }[] = [
-  { key: "micoair-h743", make: flightController },
-  { key: "esc-4in1", make: esc4in1 },
-  { key: "motor", make: motor },
-  { key: "gps-m10", make: gps },
-  { key: "elrs-rx", make: receiver },
-  { key: "vtx", make: vtx },
-  { key: "camera", make: camera },
-  { key: "buzzer", make: buzzer },
-  { key: "lipo", make: battery },
-  { key: "servo", make: servo },
-  { key: "i2c-sensor", make: sensor },
+export const STARTER: StarterEntry[] = [
+  board("micoair-h743", "Flight electronics", "flight controller fc drone autopilot ardupilot betaflight", flightController),
+  board("esc-4in1", "Flight electronics", "esc speed controller drone", esc4in1),
+  board("motor", "Flight electronics", "brushless drone bldc", motor),
+  board("gps-m10", "Flight electronics", "gnss compass navigation", gps),
+  board("elrs-rx", "Flight electronics", "receiver radio expresslrs crsf", receiver),
+  board("vtx", "Flight electronics", "video transmitter fpv", vtx),
+  board("camera", "Flight electronics", "fpv video", camera),
+  board("buzzer", "Flight electronics", "beeper led", buzzer),
+  board("lipo", "Flight electronics", "battery power pack", battery),
+  board("servo", "Modules", "actuator pwm", servo),
+  board("i2c-sensor", "Modules", "bme280 breakout barometer", sensor),
+  ...SYMBOLS,
 ];
 
 let cache: Map<string, PartDef> | null = null;
 /** A starter part, drawn once and kept. */
 export function starterPart(key: string): PartDef | undefined {
-  cache ??= new Map(STARTER.map((s) => [s.key, s.make()]));
+  cache ??= new Map(STARTER.map((s) => [s.key, { ...s.make(), starter: s.key }]));
   return cache.get(key);
 }
 
-/** The starter part in the guide: the copy taken already, or a new copy taken now. */
+/** The part a starter part is placed from as things stand: the guide's copy while devices use it, else the library's. */
+export function peekStarter(c: Circuit, key: string): PartDef | undefined {
+  const had = c.parts.find((p) => p.starter === key);
+  return had && c.devices.some((d) => d.part === had.id) ? had : starterPart(key);
+}
+
+/**
+ * The starter part in the guide: the copy its devices are placed from, or a
+ * new copy taken now. A copy nothing is placed from any more is taken afresh,
+ * so it is as the library has it today.
+ */
 export function useStarter(c: Circuit, key: string, id: () => string): PartDef | null {
   const had = c.parts.find((p) => p.starter === key);
-  if (had) return had;
+  if (had && c.devices.some((d) => d.part === had.id)) return had;
   const src = starterPart(key);
-  if (!src) return null;
-  const part: PartDef = { ...structuredClone(src), id: id() };
-  c.parts.push(part);
+  if (!src) return had ?? null;
+  const part: PartDef = { ...structuredClone(src), id: had?.id ?? id() };
+  if (had) c.parts[c.parts.indexOf(had)] = part;
+  else c.parts.push(part);
   return part;
 }
 
@@ -365,5 +399,50 @@ export function exampleCircuit(wires: (c: Circuit) => void): Circuit {
   c.routes[key("Battery", "BAT", "ESC", "BAT")] = [-17.6];
   c.routes[key("H743", "VIDEO-OUT", "VTX", "VTX")] = [124];
   c.routes[key("H743", "SBUS/CRSF", "ELRS RX", "RX")] = [-131];
+  return c;
+}
+
+// ---- the example: a circuit diagram ------------------------------------------------------------
+
+/**
+ * A small circuit diagram: a transistor switching an LED, with its base
+ * divider. Symbols are placed on the millimetre grid so that most wires run
+ * straight from pin to pin; the junction on the base wire gets its dot from
+ * the three wires that meet there.
+ */
+export function exampleDiagram(): Circuit {
+  const c = newCircuit();
+  let n = 1;
+  const id = () => `p${n++}`;
+  const put = (key: string, name: string, x: number, y: number, extra: Partial<Device> = {}): Device => {
+    const part = useStarter(c, `sym/${key}`, id)!;
+    const d: Device = { id: `d${n++}`, part: part.id, name, x, y, turn: 0, ...extra };
+    c.devices.push(d);
+    return d;
+  };
+  const devs = {
+    T1: put("npn", "T1", 0, 0),
+    X1: put("terminal", "X1", -22, 0, { caption: "$u_\\mathrm{in}$" }),
+    R1: put("resistor", "R1", -14, 0, { value: "10k" }),
+    N1: put("junction", "N1", -7, 0),
+    R3: put("resistor", "R3", -7, -7, { turn: 1, value: "100k" }),
+    GND2: put("ground", "GND2", -7, -15),
+    GND1: put("ground", "GND1", 2, -15),
+    LED1: put("led", "LED1", 2, 11, { turn: 3 }),
+    R2: put("resistor", "R2", 2, 23, { turn: 1, value: "220" }),
+    V1: put("supply", "V1", 2, 32),
+  };
+  c.nextId = n;
+  const wire = (a: keyof typeof devs, pa: string, b: keyof typeof devs, pb: string) =>
+    c.wires.push({ id: `w${c.nextId++}`, a: { dev: devs[a].id, port: pa, pin: pa }, b: { dev: devs[b].id, port: pb, pin: pb } });
+  wire("X1", "1", "R1", "1");
+  wire("R1", "2", "N1", "N");
+  wire("N1", "N", "T1", "B");
+  wire("N1", "N", "R3", "2");
+  wire("R3", "1", "GND2", "1");
+  wire("T1", "E", "GND1", "1");
+  wire("T1", "C", "LED1", "K");
+  wire("LED1", "A", "R2", "1");
+  wire("R2", "2", "V1", "1");
   return c;
 }

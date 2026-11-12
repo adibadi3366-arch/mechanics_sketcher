@@ -383,7 +383,7 @@ export function tikzParts(prims: Prim[], k = 1): { styles: string[]; lines: stri
     } else {
       const fill = p.fill ? `, fill=${p.fill === "ink" ? (p.color ? tikzColor(p.color) : "black") : "white"}` : "";
       const shape = p.k === "circle" ? `${co(p.c)} circle[radius=${num(p.r, 2)}]` : `${p.pts.map(co).join(" -- ")} -- cycle`;
-      lines.push(`  \\draw[${p.k === "circle" ? style(p) : style({ stroke: p.stroke, ink: p.ink })}${fill}] ${shape};`);
+      lines.push(`  \\draw[${p.k === "circle" ? style(p) : style({ stroke: p.stroke, ink: p.ink, width: p.width })}${fill}] ${shape};`);
     }
   }
   flush();

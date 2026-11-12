@@ -3,17 +3,18 @@
 // these, and the export writes them, enlarged to their size on paper.
 
 import type { V } from "../geom";
-import { type Prim, buildPrims, sansTex } from "../prims";
+import { type Prim, type TextPrim, buildPrims, sansTex, noteTex, noteLatex } from "../prims";
 import { texEngine } from "../tex";
 import { unitScale } from "../model";
 import { splitDrawing, activePart, mergeDrawing } from "../parts";
 import { figureBounds } from "../export";
 import {
-  type Circuit, type Device, type PartDef, type PortDef, type Wire, type WireEnd, type Side, type GuideText,
+  type Circuit, type Device, type PartDef, type PortDef, type Wire, type WireEnd, type Side, type GuideText, type Look,
   partOf, deviceById, bundleKey, keyedEnds, wireColor, pinKind, casingOf, darken, lighten, wireDoubt,
 } from "./model";
-import { type Placing, shapePrims, placePrims, place, turnDir, textPrim, roundRect, C } from "./art";
-import { type Box, type Lane, autoRoute, pathThrough, tidyPath, laneChains, flatten, leftOf } from "./route";
+import { type Placing, shapePrims, placePrims, scalePrims, place, turnDir, textPrim, roundRect, C } from "./art";
+import { type Box, type Lane, type Axis, axisOf, freeRoute, WAYS, pathThrough, tidyPath, laneChains, flatten, leftOf } from "./route";
+import { SYM } from "./symbols";
 
 /** Pin tags: how tall, how far apart, and the size of their text, in mm. */
 export const TAG = { w: 1.2, pitch: 1.35, font: 0.86, gap: 0.5, min: 3.4, pad: 0.9 } as const;
@@ -45,11 +46,20 @@ export function partPrims(part: PartDef): Prim[] {
     const fig = sketchPrims(part.sketch);
     const b = part.box ?? fig.box;
     const cx = (b.x0 + b.x1) / 2, cy = (b.y0 + b.y1) / 2;
-    prims = placePrims(fig.prims, { turn: 0, by: [-cx, -cy] });
+    // A symbol is drawn at its size on paper, which is twice its size on the guide, lines and letters with it.
+    prims = scalePrims(placePrims(fig.prims, { turn: 0, by: [-cx, -cy] }), sketchScale(part));
   }
   drawn.set(part, prims);
   return prims;
 }
+
+/**
+ * How much of its drawn size a part drawn in the sketcher has on the guide.
+ * A board is drawn at its real size. A symbol is drawn at its size on paper,
+ * with the sketcher's own lines and letters, and is half that on the guide,
+ * as the symbols of the library are.
+ */
+export const sketchScale = (part: Pick<PartDef, "symbol">): number => (part.symbol ? 0.5 : 1);
 
 /** Forgets the drawing kept for a part, after it was changed in place. */
 export function redrawPart(part: PartDef): void {
@@ -109,6 +119,8 @@ export interface DevicePlace {
   /** Its box on the guide. */
   box: Box;
   ports: PortPlace[];
+  /** What is written by it: its caption, and for a symbol its value under that. */
+  caption: string;
 }
 
 export interface BundlePlace {
@@ -123,6 +135,11 @@ export interface BundlePlace {
   places: number[];
   /** The pins at the two ends of each wire, in the order of `wires`. */
   ends: [PinPlace, PinPlace][];
+  /** The way it leaves its first port and its second: the port's own, or for a junction the way found best. */
+  ua: V;
+  ub: V;
+  /** Wires of a circuit diagram: thin, in the figure's ink, with square corners, and dots where they join. */
+  schematic: boolean;
   /** Whether it was laid by hand, not found. */
   manual: boolean;
   /** One chain of cubic pieces for each wire, in the order of `wires`. */
@@ -138,6 +155,8 @@ export interface Layout {
   devices: DevicePlace[];
   bundles: BundlePlace[];
   tags: TagPlace[];
+  /** Where wires of a circuit diagram join: three or more ways of one net meet. */
+  dots: V[];
   /** What could not be drawn, said for the person to fix. */
   problems: string[];
 }
@@ -217,7 +236,7 @@ function placePorts(dp: DevicePlace, wired: Set<string>): void {
 /** What a device takes on the guide with its tags: its box, grown to cover them. */
 export function deviceFootprint(part: PartDef, at: Placing): Box {
   const dev: Device = { id: "", part: part.id, name: "", x: at.by[0], y: at.by[1], turn: (((at.turn % 4) + 4) % 4) as 0 | 1 | 2 | 3, ...(at.flip ? { flip: true } : {}) };
-  const dp: DevicePlace = { dev, part, at, box: deviceBox(part, at), ports: [] };
+  const dp: DevicePlace = { dev, part, at, box: deviceBox(part, at), ports: [], caption: "" };
   placePorts(dp, new Set());
   const b = { ...dp.box };
   for (const p of dp.ports) for (const q of p.pins) {
@@ -239,7 +258,7 @@ export function layout(c: Circuit): Layout {
     const part = partOf(c, dev);
     if (!part) continue;
     const at = placing(dev);
-    const dp: DevicePlace = { dev, part, at, box: deviceBox(part, at), ports: [] };
+    const dp: DevicePlace = { dev, part, at, box: deviceBox(part, at), ports: [], caption: captionOf(dev, part, c.look) };
     placePorts(dp, wired);
     devices.push(dp);
     byId.set(dev.id, dp);
@@ -272,6 +291,7 @@ export function layout(c: Circuit): Layout {
     const lanes: Lane[] = [];
     const kept: Wire[] = [];
     const ends: [PinPlace, PinPlace][] = [];
+    const schematic = !!(da.part.symbol || db.part.symbol);
     for (const w of ws) {
       const [x, y] = keyedEnds(w);
       const fa = pa.pins.find((p) => p.name === x.pin), fb = pb.pins.find((p) => p.name === y.pin);
@@ -279,29 +299,44 @@ export function layout(c: Circuit): Layout {
         problems.push(`A wire goes to a pin that is not there: ${describeEnd(c, !fa ? x : y)}.`);
         continue;
       }
-      const doubt = wireDoubt(x.pin, y.pin);
+      // The pins of a symbol are named for the symbol, not for what they carry: there is nothing to check.
+      const doubt = schematic ? null : wireDoubt(x.pin, y.pin);
       if (doubt) problems.push(`Check ${describeEnd(c, x)} to ${describeEnd(c, y)}: ${doubt}.`);
       lanes.push({ from: fa.anchor, to: fb.anchor });
       kept.push(w);
       ends.push([fa, fb]);
     }
     if (!kept.length) continue;
-    const width = Math.max(pa.port.wire ?? c.look.wire, pb.port.wire ?? c.look.wire);
+    const width = schematic ? SYM.line : Math.max(pa.port.wire ?? c.look.wire, pb.port.wire ?? c.look.wire);
     const s = centroid(lanes.map((l) => l.from)), e = centroid(lanes.map((l) => l.to));
-    const ua = pa.out, ub = pb.out;
-    const acrA = leftOf(ua);
+    const freeA = !!pa.port.free, freeB = !!pb.port.free;
+    const acrA = leftOf(pa.out);
     const offs = lanes.map((l) => dot(sub(l.from, s), acrA));
-    const half = Math.max(0, ...offs.map(Math.abs)) + width / 2 + CASING / 2;
-    const r = c.look.corners === "round" ? half + TURN : 0;
-    // A pad's wire leaves along the board before it may turn; a tag already stands clear of it.
-    const leadA = r + 1 + (pa.port.kind === "pads" ? padDepth(da, pa) : 0);
-    const leadB = r + 1 + 2.5 + (pb.port.kind === "pads" ? padDepth(db, pb) : 0);
+    const half = Math.max(0, ...offs.map(Math.abs)) + width / 2 + (schematic ? 0 : CASING / 2);
+    const r = !schematic && c.look.corners === "round" ? half + TURN : 0;
+    // A pad's wire leaves along the board before it may turn; a tag already stands clear of it. A junction is a point.
+    const lead = (d: DevicePlace, p: PortPlace, more: number) => (p.port.free ? 1 : r + 1 + more + (p.port.kind === "pads" ? padDepth(d, p) : 0));
+    const leadA = lead(da, pa, 0), leadB = lead(db, pb, schematic ? 0 : 2.5);
     const stored = c.routes[key];
+    let ua = pa.out, ub = pb.out;
     let places = stored ?? [];
-    let raw = stored ? pathThrough(s, ua, e, ub, stored) : null;
+    let raw: V[] | null = null;
+    if (stored) {
+      if (freeA || freeB) {
+        // The stretches of a path turn in turn, so the axis at one end follows from the other and how many there are.
+        const other = (x: Axis): Axis => (x === "h" ? "v" : "h");
+        const far = (x: Axis): Axis => (stored.length % 2 === 1 ? x : other(x));
+        const axA: Axis = !freeA ? axisOf(pa.out) : c.axes?.[key] ?? (freeB ? "h" : far(axisOf(pb.out)));
+        const axB: Axis = !freeB ? axisOf(pb.out) : far(axA);
+        if (freeA) ua = axA === "h" ? [e[0] >= s[0] ? 1 : -1, 0] : [0, e[1] >= s[1] ? 1 : -1];
+        if (freeB) ub = axB === "h" ? [s[0] >= e[0] ? 1 : -1, 0] : [0, s[1] >= e[1] ? 1 : -1];
+      }
+      raw = pathThrough(s, ua, e, ub, stored);
+    }
     const manual = !!raw;
     if (!raw) {
-      places = autoRoute(s, ua, e, ub, { leadA, leadB, half, boxes, ownA: devices.indexOf(da), ownB: devices.indexOf(db) });
+      const got = freeRoute(s, freeA ? WAYS : [pa.out], e, freeB ? WAYS : [pb.out], { leadA, leadB, half, boxes, ownA: devices.indexOf(da), ownB: devices.indexOf(db) });
+      ua = got.us; ub = got.ue; places = got.places;
       raw = pathThrough(s, ua, e, ub, places);
       if (!raw) { places = []; raw = [s, e]; }
     }
@@ -309,11 +344,65 @@ export function layout(c: Circuit): Layout {
     if (path.length < 2) path = [s, add(s, mul(ua, 0.001))];
     const chains = laneChains(path, lanes, r);
     bundles.push({
-      key, a: pa, b: pb, wires: kept, path, raw, places, ends, manual, chains, lines: chains.map((ch) => flatten(ch)), width,
+      key, a: pa, b: pb, wires: kept, path, raw, places, ends, ua, ub, schematic, manual, chains, lines: chains.map((ch) => flatten(ch)), width,
       over: pa.port.kind === "pads" || pb.port.kind === "pads",
     });
   }
-  return { devices, bundles, tags, problems };
+  return { devices, bundles, tags, dots: junctionDots(devices, bundles), problems };
+}
+
+/**
+ * Where the wires of a circuit diagram get a dot: wherever three or more
+ * ways of one net meet. Wires that share a pin are one net; they are laid one
+ * by one, so two from one pin run together until they part, and that is where
+ * the dot goes. Wires of different nets cross without one.
+ */
+function junctionDots(devices: DevicePlace[], bundles: BundlePlace[]): V[] {
+  const wires = bundles.filter((b) => b.schematic);
+  if (!wires.length) return [];
+  const parent = new Map<string, string>();
+  const find = (k: string): string => {
+    if (!parent.has(k)) parent.set(k, k);
+    let root = k;
+    while (parent.get(root) !== root) root = parent.get(root)!;
+    parent.set(k, root);
+    return root;
+  };
+  const pinKey = (p: PortPlace, pin: PinPlace) => `${p.dev.id}\u0000${p.port.name}\u0000${pin.name}`;
+  for (const b of wires) b.ends.forEach(([x, y]) => parent.set(find(pinKey(b.a, x)), find(pinKey(b.b, y))));
+  const nets = new Map<string, [V, V][]>();
+  for (const b of wires) b.lines.forEach((line, i) => {
+    const net = find(pinKey(b.a, b.ends[i][0]));
+    const segs = nets.get(net) ?? [];
+    for (let k = 0; k + 1 < line.length; k++) if (Math.hypot(line[k + 1][0] - line[k][0], line[k + 1][1] - line[k][1]) > 1e-6) segs.push([line[k], line[k + 1]]);
+    nets.set(net, segs);
+  });
+  // A junction placed by hand draws its own dot.
+  const near = (p: V, q: V) => Math.hypot(p[0] - q[0], p[1] - q[1]) < 1e-4;
+  const own = devices.flatMap((d) => d.ports.filter((p) => p.port.free).flatMap((p) => p.pins.map((q) => q.at)));
+  const dots: V[] = [];
+  for (const segs of nets.values()) {
+    if (segs.length < 2) continue;
+    const seen = new Set<string>();
+    for (const seg of segs) for (const p of seg) {
+      const k = `${Math.round(p[0] * 1e3)},${Math.round(p[1] * 1e3)}`;
+      if (seen.has(k)) continue;
+      seen.add(k);
+      // The ways the net leaves this point.
+      const ways = new Set<number>();
+      for (const [a, b] of segs) {
+        const ab = sub(b, a), ap = sub(p, a);
+        const len2 = dot(ab, ab);
+        if (Math.abs(ab[0] * ap[1] - ab[1] * ap[0]) > 1e-6 * Math.sqrt(len2)) continue;
+        const t = dot(ap, ab) / len2;
+        if (t < -1e-6 || t > 1 + 1e-6) continue;
+        if (!near(p, a)) ways.add(Math.round(Math.atan2(a[1] - p[1], a[0] - p[0]) * 1e3));
+        if (!near(p, b)) ways.add(Math.round(Math.atan2(b[1] - p[1], b[0] - p[0]) * 1e3));
+      }
+      if (ways.size >= 3 && !own.some((q) => near(p, q))) dots.push(p);
+    }
+  }
+  return dots;
 }
 
 const centroid = (pts: V[]): V => mul(pts.reduce((s, p) => add(s, p), [0, 0] as V), 1 / Math.max(1, pts.length));
@@ -329,10 +418,10 @@ function padDepth(d: DevicePlace, p: PortPlace): number {
   return deepest;
 }
 
-/** A wire end as a person reads it: device, port, pin. */
+/** A wire end as a person reads it: device, port, pin. A pin that is a port of its own, as on a symbol, is named once. */
 export function describeEnd(c: Circuit, e: WireEnd): string {
   const d = deviceById(c, e.dev);
-  return `${d?.name ?? "?"} ${e.port} ${e.pin}`.replace(/\s+/g, " ").trim();
+  return `${d?.name ?? "?"} ${e.port === e.pin ? "" : e.port} ${e.pin}`.replace(/\s+/g, " ").trim();
 }
 
 // ---- drawing it ------------------------------------------------------------------------------
@@ -373,6 +462,11 @@ export function guideLayers(c: Circuit, L: Layout, parts = true): GuideLayers {
   const under: Prim[] = [], over: Prim[] = [], tags: Prim[] = [], text: Prim[] = [];
   for (const b of L.bundles) {
     const into = b.over ? over : under;
+    if (b.schematic) {
+      // A wire of a circuit diagram: a thin line in the figure's ink, or in a colour of its own.
+      b.lines.forEach((line, i) => into.push({ k: "path", layer: "sym", pts: line, stroke: "member", width: b.width, ...(b.wires[i].color ? { ink: b.wires[i].color } : {}) }));
+      continue;
+    }
     const cols = b.wires.map(wireColor);
     if (c.look.casing) b.chains.forEach((ch, i) => into.push({ k: "bezier", layer: "sym", pts: ch, stroke: "member", width: b.width + CASING, ink: casingOf(cols[i]) }));
     b.chains.forEach((ch, i) => into.push({ k: "bezier", layer: "sym", pts: ch, stroke: "member", width: b.width, ink: cols[i] === "#1c1c1c" ? "#2d2f31" : cols[i] }));
@@ -387,6 +481,7 @@ export function guideLayers(c: Circuit, L: Layout, parts = true): GuideLayers {
       }
     }
   }
+  for (const p of L.dots) over.push({ k: "circle", layer: "sym", c: p, r: SYM.dot, stroke: "member", width: 0.05, fill: "ink" });
   for (const t of L.tags) {
     if (!t.wired && c.look.unused === "hide") continue;
     tags.push(...tagPrims(t, t.pin));
@@ -395,58 +490,129 @@ export function guideLayers(c: Circuit, L: Layout, parts = true): GuideLayers {
   for (const b of L.bundles) b.wires.forEach((w, i) => {
     if (!w.label) return;
     const line = b.lines[i];
-    const at = line[Math.floor(line.length / 2)];
-    text.push(textPrim(add(at, [0, b.width / 2 + 0.9]), w.label, 1.1, C.ink, true, "middle"));
+    if (!b.schematic) {
+      const at = line[Math.floor(line.length / 2)];
+      text.push(textPrim(add(at, [0, b.width / 2 + 0.9]), w.label, 1.1, C.ink, true, "middle"));
+      return;
+    }
+    // On a circuit diagram: beside the middle of the wire's longest stretch, above it or to its right.
+    let best = 0, bestLen = -1;
+    for (let k = 0; k + 1 < line.length; k++) {
+      const d = Math.hypot(line[k + 1][0] - line[k][0], line[k + 1][1] - line[k][1]);
+      if (d > bestLen) { bestLen = d; best = k; }
+    }
+    const a = line[best], q = line[best + 1], mid: V = [(a[0] + q[0]) / 2, (a[1] + q[1]) / 2];
+    const upright = Math.abs(q[0] - a[0]) < Math.abs(q[1] - a[1]);
+    text.push(notePrim(upright ? [mid[0] + 0.2, mid[1]] : [mid[0], mid[1] + 0.25], w.label, SYM.font, upright ? "w" : "s"));
   });
   for (const d of L.devices) text.push(...captionPrims(d));
   for (const t of c.texts) text.push(...guideTextPrims(t));
   return { under, parts: parts ? L.devices.map((d) => ({ dev: d.dev, prims: placePrims(partPrims(d.part), d.at) })) : [], over, tags, text };
 }
 
-/** The caption of a device: its own, or its part's. */
-export const captionOf = (d: Device, part: PartDef): string => d.caption ?? part.caption ?? "";
+/**
+ * What a symbol is labelled with when nothing was typed: its name as a figure
+ * writes it, R1 as an R with the 1 set low.
+ */
+export function designator(name: string): string {
+  const m = /^([A-Za-z]+)(\d+)$/.exec(name.trim());
+  if (!m) return name.trim();
+  return m[1].length === 1 ? `$${m[1]}_{${m[2]}}$` : `$\\mathrm{${m[1]}}_{${m[2]}}$`;
+}
+
+/**
+ * The value of a symbol as it is written. One typed short (4k7, 100n, 2u2,
+ * 12) gets the part's unit and is set as a figure sets a quantity; anything
+ * else is kept as typed.
+ */
+export function valueText(typed: string, unit: string | undefined, comma = false): string {
+  const t = typed.trim();
+  if (!t || !unit) return t;
+  let digits: string, prefix: string;
+  // 4k7, 2u2, 4R7: the multiplier stands where the decimal sign would.
+  const infix = /^(\d+)([pnuµμmkKMGR])(\d+)$/.exec(t);
+  if (infix) { digits = `${infix[1]}.${infix[3]}`; prefix = infix[2]; }
+  else {
+    const plain = /^(\d+(?:[.,]\d+)?)\s*([pnuµμmkKMG]?)$/.exec(t);
+    if (!plain) return t;
+    digits = plain[1].replace(",", ".");
+    prefix = plain[2];
+  }
+  if (prefix === "R") prefix = "";
+  if (prefix === "K") prefix = "k";
+  const number = comma ? digits.replace(".", "{,}") : digits;
+  const u = unit === "Ω" ? "\\Omega" : unit;
+  const micro = prefix === "u" || prefix === "µ" || prefix === "μ";
+  return `$${number}\\,${micro ? `\\mu\\mathrm{${u}}` : `\\mathrm{${prefix}${u}}`}$`;
+}
+
+/**
+ * What is written by a device. A part's caption, unless the device has its
+ * own. A symbol is labelled with its name where it has no caption, and has
+ * its value on a line under that.
+ */
+export function captionOf(d: Device, part: PartDef, look?: Look): string {
+  if (!part.symbol) return d.caption ?? part.caption ?? "";
+  const label = d.caption ?? part.caption ?? designator(d.name);
+  const value = d.value ? valueText(d.value, part.unit, !!look?.comma) : "";
+  return [label, value].filter((x) => x.trim()).join("\n");
+}
+
+/** How a device's caption is set: a symbol's as a figure's labels are, a part's in bold sans. */
+const captionStyle = (part: PartDef) => (part.symbol ? { size: SYM.font, note: true, gap: 0.9 } : { size: CAPTION.size, note: false, gap: 1.6 });
 
 /**
  * Where a device's caption is, from its middle: where it was put, or else on
- * the first side of under, over, right and left that has no port, clear of
- * the device. Where every side has one, it goes past the top right corner.
+ * the first side that has no port, clear of the device: under a part, then
+ * over it, right and left; over a symbol, then right, under and left. Where
+ * every side has one, it goes past the top right corner.
  */
 export function captionOffset(d: DevicePlace): V {
   if (d.dev.cap) return d.dev.cap;
-  const text = captionOf(d.dev, d.part).trim();
-  const lines = text.split("\n");
-  const h = lines.length * CAPTION.size * CAPTION.line;
-  const w = Math.max(0, ...lines.map((l) => texEngine().measure(sansTex(l.trim() || " ", true)).w * CAPTION.size));
+  const style = captionStyle(d.part);
+  const lines = d.caption.trim().split("\n");
+  const h = lines.length * style.size * CAPTION.line;
+  const w = Math.max(0, ...lines.map((l) => texEngine().measure(style.note ? noteTex(l.trim() || " ") : sansTex(l.trim() || " ", true)).w * style.size));
   const b = d.box, cx = d.dev.x, cy = d.dev.y;
-  const used = new Set(d.ports.map((p) => (p.out[1] < -0.5 ? "bottom" : p.out[1] > 0.5 ? "top" : p.out[0] > 0.5 ? "right" : "left")));
-  const gap = 1.6;
-  if (!used.has("bottom")) return [0, b.y0 - cy - gap - h / 2];
-  if (!used.has("top")) return [0, b.y1 - cy + gap + h / 2];
-  if (!used.has("right")) return [b.x1 - cx + gap + w / 2, 0];
-  if (!used.has("left")) return [b.x0 - cx - gap - w / 2, 0];
+  const used = new Set<string>(d.ports.filter((p) => !p.port.free).map((p) => (p.out[1] < -0.5 ? "bottom" : p.out[1] > 0.5 ? "top" : p.out[0] > 0.5 ? "right" : "left")));
+  const gap = style.gap;
+  const at: Record<string, V> = {
+    bottom: [0, b.y0 - cy - gap - h / 2], top: [0, b.y1 - cy + gap + h / 2],
+    right: [b.x1 - cx + gap + w / 2, 0], left: [b.x0 - cx - gap - w / 2, 0],
+  };
+  for (const side of d.part.symbol ? ["top", "right", "bottom", "left"] : ["bottom", "top", "right", "left"]) if (!used.has(side)) return at[side];
   return [b.x1 - cx + w / 2 + 1, b.y1 - cy + h / 2 + 1];
 }
 
 export function captionPrims(d: DevicePlace): Prim[] {
-  const text = captionOf(d.dev, d.part).trim();
+  const text = d.caption.trim();
   if (!text) return [];
   const off = captionOffset(d);
-  return linesPrims([d.dev.x + off[0], d.dev.y + off[1]], text, CAPTION.size, true, C.ink, "middle");
+  const style = captionStyle(d.part);
+  return linesPrims([d.dev.x + off[0], d.dev.y + off[1]], text, style.size, true, C.ink, "middle", style.note);
+}
+
+/** A line of text set as a figure's labels are: in the document's font, with math between dollar signs. */
+function notePrim(at: V, line: string, size: number, anchor: TextPrim["anchor"]): TextPrim {
+  return { k: "text", layer: "sym", at, tex: noteTex(line), latex: noteLatex(line).latex, size, anchor };
 }
 
 /** Text in lines, the middle of the block at `at`, or its left or right edge there. */
-function linesPrims(at: V, text: string, size: number, bold: boolean, color: string, align: "start" | "middle" | "end"): Prim[] {
+function linesPrims(at: V, text: string, size: number, bold: boolean, color: string, align: "start" | "middle" | "end", note = false): Prim[] {
   const lines = text.split("\n");
   const step = size * CAPTION.line;
   const out: Prim[] = [];
   lines.forEach((line, i) => {
-    if (line.trim()) out.push(textPrim([at[0], at[1] + ((lines.length - 1) / 2 - i) * step], line.trim(), size, color, bold, align));
+    if (!line.trim()) return;
+    const p: V = [at[0], at[1] + ((lines.length - 1) / 2 - i) * step];
+    if (!note) out.push(textPrim(p, line.trim(), size, color, bold, align));
+    else out.push({ ...notePrim(p, line.trim(), size, align === "start" ? "w" : align === "end" ? "e" : "c"), ...(color === C.ink ? {} : { ink: color }) });
   });
   return out;
 }
 
 export function guideTextPrims(t: GuideText): Prim[] {
-  return linesPrims([t.x, t.y], t.text, t.size, !!t.bold, t.color ?? C.ink, t.align ?? "start");
+  return linesPrims([t.x, t.y], t.text, t.size, !!t.bold, t.color ?? C.ink, t.align ?? "start", !!t.serif);
 }
 
 /** Every primitive of the guide, in the order they are drawn. */

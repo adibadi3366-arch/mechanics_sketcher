@@ -4,7 +4,7 @@
 // moves that drawing to where it is on the guide.
 
 import type { V } from "../geom";
-import { type Prim, type TextPrim, type Outline, type OutlineSeg, PAPER, sansTex, sansLatex } from "../prims";
+import { type Prim, type TextPrim, type Outline, type OutlineSeg, PAPER, sansTex, sansLatex, strokeWidth } from "../prims";
 import type { Shape, Side, ConnectorStyle } from "./model";
 
 /** The colours boards are drawn in. */
@@ -19,6 +19,16 @@ export const C = {
 
 /** A tenth of a micrometre: anything shorter is nothing. */
 const EPS = 1e-7;
+
+/**
+ * The colour a shape names as a primitive takes it: "ink" is the black every
+ * figure is drawn in, which a primitive has when it names no colour at all.
+ */
+const inkOf = (color: string | undefined): { ink?: string } => (!color || color === "ink" ? {} : { ink: color });
+/** The style a shape is stroked in: the figure's ink runs in its standard line, so a circuit diagram's TikZ reads plainly. */
+const strokeOf = (color: string | undefined) => (color === "ink" ? "member" as const : "symbol" as const);
+/** What marks a text primitive that stays upright when its part is turned. */
+export const UPRIGHT = "upright";
 
 /** Builds the primitives of a part, about the middle of its w × h box, y up. */
 export class Pen {
@@ -39,44 +49,66 @@ export class Pen {
     if (w <= EPS || h <= EPS) return;
     const r = Math.max(0, Math.min(o.r ?? 0, w / 2, h / 2));
     const [x0, y1] = this.at(x, y), [x1, y0] = this.at(x + w, y + h);
-    if (o.fill) this.fillPath(roundRect(x0, y0, x1, y1, r), o.fill);
+    if (o.fill) this.fillPath(roundRect(x0, y0, x1, y1, r), o.fill === "ink" ? "#000000" : o.fill);
     if (o.stroke && (o.width ?? 0.15) > 0) {
-      // The outline runs along the middle of the edge, as SVG draws it.
-      this.out.push({ k: "bezier", layer: "sym", pts: roundRectChain(x0, y0, x1, y1, r), stroke: "symbol", width: o.width ?? 0.15, ink: o.stroke });
+      // The outline runs along the middle of the edge, as SVG draws it. Square corners need no curves.
+      if (r <= EPS) this.out.push({ k: "path", layer: "sym", pts: [[x0, y0], [x1, y0], [x1, y1], [x0, y1], [x0, y0]], stroke: strokeOf(o.stroke), width: o.width ?? 0.15, ...inkOf(o.stroke) });
+      else this.out.push({ k: "bezier", layer: "sym", pts: roundRectChain(x0, y0, x1, y1, r), stroke: strokeOf(o.stroke), width: o.width ?? 0.15, ...inkOf(o.stroke) });
     }
   }
 
   circle(x: number, y: number, r: number, o: { fill?: string; stroke?: string; width?: number } = {}): void {
     if (r <= EPS) return;
     const c = this.at(x, y);
+    if (o.fill === "ink") {
+      // A dot in the figure's ink, with an outline of the same.
+      this.out.push({ k: "circle", layer: "sym", c, r, stroke: strokeOf(o.stroke), width: o.width ?? 0.15, fill: "ink", ...inkOf(o.stroke) });
+      return;
+    }
     if (o.fill) this.fillPath({ kind: "circle", c, r }, o.fill);
-    if (o.stroke && (o.width ?? 0.15) > 0) this.out.push({ k: "circle", layer: "sym", c, r, stroke: "symbol", width: o.width ?? 0.15, ink: o.stroke });
+    if (o.stroke && (o.width ?? 0.15) > 0) this.out.push({ k: "circle", layer: "sym", c, r, stroke: strokeOf(o.stroke), width: o.width ?? 0.15, ...inkOf(o.stroke) });
   }
 
-  line(points: [number, number][], o: { stroke?: string; width?: number } = {}): void {
+  line(points: [number, number][], o: { stroke?: string; width?: number; dash?: number[] } = {}): void {
     if (points.length < 2) return;
-    this.out.push({ k: "path", layer: "sym", pts: points.map(([x, y]) => this.at(x, y)), stroke: "symbol", width: o.width ?? 0.15, ink: o.stroke ?? C.ink });
+    this.out.push({
+      k: "path", layer: "sym", pts: points.map(([x, y]) => this.at(x, y)), stroke: strokeOf(o.stroke), width: o.width ?? 0.15, ...inkOf(o.stroke ?? C.ink),
+      ...(o.dash?.length ? { dash: o.dash } : {}),
+    });
   }
 
   polygon(points: [number, number][], o: { fill?: string; stroke?: string; width?: number } = {}): void {
     if (points.length < 3) return;
     const pts = points.map(([x, y]) => this.at(x, y));
+    if (o.fill === "ink") {
+      // Filled with the figure's ink: an arrowhead, a solid triangle.
+      this.out.push({ k: "poly", layer: "sym", pts, stroke: strokeOf(o.stroke), width: o.width ?? 0.15, fill: "ink", ...inkOf(o.stroke) });
+      return;
+    }
     if (o.fill) this.fillPath({ kind: "path", start: pts[0], segs: [...pts.slice(1), pts[0]].map((to) => ({ k: "L", to }) as OutlineSeg) }, o.fill);
-    if (o.stroke) this.out.push({ k: "path", layer: "sym", pts: [...pts, pts[0]], stroke: "symbol", width: o.width ?? 0.15, ink: o.stroke });
+    if (o.stroke) this.out.push({ k: "path", layer: "sym", pts: [...pts, pts[0]], stroke: strokeOf(o.stroke), width: o.width ?? 0.15, ...inkOf(o.stroke) });
   }
 
   /** From `start` to `end` degrees, counter-clockwise as seen. */
   arc(x: number, y: number, r: number, start: number, end: number, o: { stroke?: string; width?: number } = {}): void {
     let a0 = (start * Math.PI) / 180, a1 = (end * Math.PI) / 180;
     while (a1 <= a0) a1 += 2 * Math.PI;
-    this.out.push({ k: "arc", layer: "sym", c: this.at(x, y), r, a0, a1, stroke: "symbol", width: o.width ?? 0.15, ink: o.stroke ?? C.ink });
+    this.out.push({ k: "arc", layer: "sym", c: this.at(x, y), r, a0, a1, stroke: strokeOf(o.stroke), width: o.width ?? 0.15, ...inkOf(o.stroke ?? C.ink) });
   }
 
   /** Text centred on (x, y), or starting or ending there; turned `rot` degrees counter-clockwise. */
-  text(x: number, y: number, text: string, o: { size?: number; color?: string; bold?: boolean; align?: "start" | "middle" | "end"; rot?: number } = {}): void {
+  text(x: number, y: number, text: string, o: { size?: number; color?: string; bold?: boolean; align?: "start" | "middle" | "end"; rot?: number; math?: boolean; upright?: boolean } = {}): void {
     const t = text.trim();
     if (!t) return;
-    this.out.push(textPrim(this.at(x, y), t, o.size ?? 1.3, o.color ?? C.silk, o.bold ?? true, o.align ?? "middle", ((o.rot ?? 0) * Math.PI) / 180));
+    const rot = ((o.rot ?? 0) * Math.PI) / 180;
+    const align = o.align ?? "middle";
+    const prim: TextPrim = o.math
+      // Math, set as a figure's labels are: the letter in a meter, the sign of a gate.
+      ? { k: "text", layer: "sym", at: this.at(x, y), tex: t, size: o.size ?? 1.3, anchor: align === "start" ? "w" : align === "end" ? "e" : "c", ...inkOf(o.color), ...(Math.abs(rot) > 1e-9 ? { rot } : {}) }
+      : textPrim(this.at(x, y), t, o.size ?? 1.3, o.color ?? C.silk, o.bold ?? true, align, rot);
+    if (!o.math && o.color === "ink") delete prim.ink;
+    if (o.upright) prim.part = UPRIGHT;
+    this.out.push(prim);
   }
 }
 
@@ -255,7 +287,7 @@ export function shapePrims(shapes: Shape[], w: number, h: number): Prim[] {
       case "line": pen.line(s.points, s); break;
       case "polygon": pen.polygon(s.points, s); break;
       case "arc": pen.arc(s.x, s.y, s.r, s.start, s.end, s); break;
-      case "text": pen.text(s.x, s.y, s.text, { size: s.size, color: s.color, bold: s.bold, align: s.align, rot: s.rotate }); break;
+      case "text": pen.text(s.x, s.y, s.text, { size: s.size, color: s.color, bold: s.bold, align: s.align, rot: s.rotate, math: s.math, upright: s.upright }); break;
       case "connector": connector(pen, s); break;
       case "chip": chip(pen, s); break;
       case "hole": hole(pen, s); break;
@@ -328,7 +360,8 @@ export function placePrims(prims: Prim[], at: Placing): Prim[] {
       case "bezier": return { ...p, pts: p.pts.map(f) };
       case "arc": return fl ? { ...p, c: f(p.c), a0: ang(p.a1), a1: ang(p.a0) + (ang(p.a0) < ang(p.a1) ? 2 * Math.PI : 0) } : { ...p, c: f(p.c), a0: p.a0 + da, a1: p.a1 + da };
       case "text": {
-        const rot = (p.rot ?? 0) + da;
+        // A letter in a symbol reads the same however the symbol is turned.
+        const rot = (p.rot ?? 0) + (p.part === UPRIGHT ? 0 : da);
         const anchor = fl ? MIRROR_ANCHOR[p.anchor] ?? p.anchor : p.anchor;
         return { ...p, at: f(p.at), anchor, rot: Math.abs(Math.sin(rot)) > 1e-9 || Math.cos(rot) < 0 ? rot : undefined };
       }
@@ -342,7 +375,8 @@ export function placePrims(prims: Prim[], at: Placing): Prim[] {
 export function scalePrims(prims: Prim[], k: number): Prim[] {
   if (k === 1) return prims;
   const f = (p: V): V => [p[0] * k, p[1] * k];
-  const w = (x: number | undefined) => (x === undefined ? undefined : x * k);
+  // A stroke without a thickness of its own has that of its style, and that is enlarged with the rest.
+  const w = (p: Parameters<typeof strokeWidth>[0]) => strokeWidth(p) * k;
   const outline = (o: Outline): Outline => o.kind === "circle"
     ? { kind: "circle", c: f(o.c), r: o.r * k }
     : {
@@ -351,15 +385,29 @@ export function scalePrims(prims: Prim[], k: number): Prim[] {
     };
   return prims.map((p): Prim => {
     switch (p.k) {
-      case "line": return { ...p, a: f(p.a), b: f(p.b), width: w(p.width) };
-      case "circle": return { ...p, c: f(p.c), r: p.r * k, width: w(p.width) };
-      case "poly": return { ...p, pts: p.pts.map(f) };
-      case "path": return { ...p, pts: p.pts.map(f), width: w(p.width), dash: p.dash?.map((d) => d * k) };
-      case "bezier": return { ...p, pts: p.pts.map(f), width: w(p.width), dash: p.dash?.map((d) => d * k) };
-      case "arc": return { ...p, c: f(p.c), r: p.r * k, width: w(p.width) };
+      case "line": return { ...p, a: f(p.a), b: f(p.b), width: w(p), dash: p.dash?.map((d) => d * k) };
+      case "circle": return { ...p, c: f(p.c), r: p.r * k, width: w(p), dash: p.dash?.map((d) => d * k) };
+      case "poly": return { ...p, pts: p.pts.map(f), width: w(p) };
+      case "path": return { ...p, pts: p.pts.map(f), width: w(p), dash: p.dash?.map((d) => d * k) };
+      case "bezier": return { ...p, pts: p.pts.map(f), width: w(p), dash: p.dash?.map((d) => d * k) };
+      case "arc": return { ...p, c: f(p.c), r: p.r * k, width: w(p), dash: p.dash?.map((d) => d * k) };
       case "text": return { ...p, at: f(p.at), size: (p.size ?? PAPER.em) * k };
       case "region": return { ...p, outlines: p.outlines.map(outline) };
       case "image": return { ...p, at: f(p.at), w: p.w * k, h: p.h * k };
     }
+  });
+}
+
+/**
+ * The primitives with a thickness left off wherever it is the one their
+ * style has anyway, so a file written from them names it once, in the style.
+ * A circuit diagram's TikZ then reads \draw[member] from end to end.
+ */
+export function plainWidths(prims: Prim[]): Prim[] {
+  return prims.map((p): Prim => {
+    if (p.k === "text" || p.k === "region" || p.k === "image" || p.width === undefined) return p;
+    if (Math.abs(p.width - strokeWidth({ stroke: p.stroke })) > 0.004) return p;
+    const { width: _own, ...rest } = p;
+    return rest as Prim;
   });
 }

@@ -14,17 +14,21 @@ export type XY = [number, number];
 /**
  * One shape of a part's drawing. Plain shapes, and ready-made pieces of a
  * board (a connector, a chip, a mounting hole) that are drawn the same way on
- * every part. Colours are CSS hex; `width` is a line's thickness in mm.
+ * every part. Colours are CSS hex, or "ink" for the black a figure is drawn
+ * in, as circuit symbols are; `width` is a line's thickness in mm.
  */
 export type Shape =
   | { type: "rect"; x: number; y: number; w: number; h: number; r?: number; fill?: string; stroke?: string; width?: number }
   | { type: "circle"; x: number; y: number; r: number; fill?: string; stroke?: string; width?: number }
-  | { type: "line"; points: XY[]; stroke?: string; width?: number }
+  | { type: "line"; points: XY[]; stroke?: string; width?: number; dash?: number[] }
   | { type: "polygon"; points: XY[]; fill?: string; stroke?: string; width?: number }
   /** Part of a circle, from `start` to `end` in degrees, counter-clockwise as seen, 0 pointing right. */
   | { type: "arc"; x: number; y: number; r: number; start: number; end: number; stroke?: string; width?: number }
-  /** Text centred on (x, y), or starting or ending there. `rotate` is in degrees, counter-clockwise as seen. */
-  | { type: "text"; x: number; y: number; text: string; size?: number; color?: string; bold?: boolean; align?: "start" | "middle" | "end"; rotate?: number }
+  /**
+   * Text centred on (x, y), or starting or ending there. `rotate` is in degrees, counter-clockwise as seen.
+   * With `math` the text is TeX math (\geq 1, \mathrm{M}); `upright` text stays upright when its part is turned.
+   */
+  | { type: "text"; x: number; y: number; text: string; size?: number; color?: string; bold?: boolean; align?: "start" | "middle" | "end"; rotate?: number; math?: boolean; upright?: boolean }
   /** A wire-to-board connector whose opening is on `side`, centred on (x, y) at the edge of the board. */
   | { type: "connector"; x: number; y: number; side: Side; pins: number; pitch?: number; style?: ConnectorStyle; mark?: boolean }
   | { type: "chip"; x: number; y: number; w: number; h: number; label?: string; legs?: number; dot?: boolean; fill?: string; size?: number }
@@ -52,6 +56,8 @@ export interface PortDef {
   pins: PinDef[];
   /** How thick its wires are, in mm. Unset: the guide's wire. */
   wire?: number;
+  /** Its wires leave whichever way suits where they go, as at a junction of a circuit diagram. */
+  free?: true;
 }
 
 /** Something that can be placed on the guide: a board, a module, a motor, a battery. */
@@ -75,6 +81,14 @@ export interface PartDef {
   ports: PortDef[];
   /** The starter part it was taken from. */
   starter?: string;
+  /**
+   * A symbol of a circuit diagram, not a picture of a part: its wires are
+   * thin, black and square-cornered and run right onto its pins, its caption
+   * is set as a figure's labels are, with math, and devices are numbered R1, R2.
+   */
+  symbol?: true;
+  /** For a symbol: the unit of its value (Ω, F, H, V, A), added to a value typed short. */
+  unit?: string;
 }
 
 /** A part placed on the guide. */
@@ -92,6 +106,8 @@ export interface Device {
   flip?: boolean;
   /** Written under it, in place of the part's caption; empty for none. */
   caption?: string;
+  /** For a symbol: its value, as typed. 4k7, 100n and the like are written out with the part's unit; anything else is kept. */
+  value?: string;
   /** Where the caption is, from the middle of the device, in mm on the guide. Unset: under it. */
   cap?: XY;
 }
@@ -120,6 +136,8 @@ export interface GuideText {
   bold?: boolean;
   color?: string;
   align?: "start" | "middle" | "end";
+  /** Set as a figure's labels are, in the document's own font, with math between dollar signs. Unset: in sans. */
+  serif?: true;
 }
 
 /** How the guide is drawn. */
@@ -134,6 +152,8 @@ export interface Look {
   unused: "outline" | "hide";
   /** How much larger than its mm the guide is on paper. */
   scale: number;
+  /** Values of symbols are written with a decimal comma: 4,7 kΩ. */
+  comma?: true;
 }
 
 export interface Circuit {
@@ -147,6 +167,11 @@ export interface Circuit {
    * stretches start at the devices and follow them.
    */
   routes: Record<string, number[]>;
+  /**
+   * For a bundle moved by hand that starts at a junction: whether it leaves
+   * its first port across the page or up it, which the port itself does not say.
+   */
+  axes?: Record<string, "h" | "v">;
   look: Look;
   nextId: number;
 }
@@ -176,7 +201,11 @@ function readPort(raw: unknown): PortDef | null {
   if (!isObj(raw) || !isStr(raw.name) || !SIDES.includes(raw.side as Side) || !Array.isArray(raw.pins)) return null;
   const pins = raw.pins.filter((p): p is PinDef => isObj(p) && isStr(p.name) && isNum(p.x) && isNum(p.y)).map((p) => ({ name: p.name, x: p.x, y: p.y }));
   if (!pins.length) return null;
-  return { name: raw.name, side: raw.side as Side, kind: raw.kind === "pads" ? "pads" : "plug", pins, ...(isNum(raw.wire) && raw.wire > 0 ? { wire: raw.wire } : {}) };
+  return {
+    name: raw.name, side: raw.side as Side, kind: raw.kind === "pads" ? "pads" : "plug", pins,
+    ...(isNum(raw.wire) && raw.wire > 0 ? { wire: raw.wire } : {}),
+    ...(raw.free === true ? { free: true as const } : {}),
+  };
 }
 
 function readPart(raw: unknown, readSketch?: (raw: unknown) => Sketch): PartDef | null {
@@ -190,6 +219,8 @@ function readPart(raw: unknown, readSketch?: (raw: unknown) => Sketch): PartDef 
     ...(isObj(raw.sketch) && Array.isArray(raw.sketch.entities) ? { sketch: readSketch ? readSketch(raw.sketch) : (raw.sketch as unknown as Sketch) } : {}),
     ...(box ? { box } : {}),
     ...(isStr(raw.starter) ? { starter: raw.starter } : {}),
+    ...(raw.symbol === true ? { symbol: true as const } : {}),
+    ...(isStr(raw.unit) && raw.unit ? { unit: raw.unit } : {}),
   };
 }
 
@@ -217,6 +248,7 @@ export function readCircuit(raw: unknown, readSketch?: (raw: unknown) => Sketch)
       id: d.id, part: d.part, name: d.name, x: d.x, y: d.y, turn,
       ...(d.flip === true ? { flip: true } : {}),
       ...(isStr(d.caption) ? { caption: d.caption } : {}),
+      ...(isStr(d.value) && d.value ? { value: d.value } : {}),
       ...(Array.isArray(d.cap) && isNum(d.cap[0]) && isNum(d.cap[1]) ? { cap: [d.cap[0], d.cap[1]] as XY } : {}),
     }];
   });
@@ -234,10 +266,14 @@ export function readCircuit(raw: unknown, readSketch?: (raw: unknown) => Sketch)
         ...(t.bold === true ? { bold: true } : {}),
         ...(isStr(t.color) ? { color: t.color } : {}),
         ...(t.align === "start" || t.align === "middle" || t.align === "end" ? { align: t.align } : {}),
+        ...(t.serif === true ? { serif: true as const } : {}),
       }]
       : []);
   if (isObj(raw.routes)) {
     for (const [k, v] of Object.entries(raw.routes)) if (Array.isArray(v) && v.every(isNum)) c.routes[k] = v;
+  }
+  if (isObj(raw.axes)) {
+    for (const [k, v] of Object.entries(raw.axes)) if ((v === "h" || v === "v") && c.routes[k]) (c.axes ??= {})[k] = v;
   }
   if (isObj(raw.look)) {
     const l = raw.look;
@@ -247,6 +283,7 @@ export function readCircuit(raw: unknown, readSketch?: (raw: unknown) => Sketch)
       wire: isNum(l.wire) && l.wire > 0.05 && l.wire < 5 ? l.wire : DEFAULT_LOOK.wire,
       unused: l.unused === "hide" ? "hide" : "outline",
       scale: isNum(l.scale) && l.scale > 0.05 && l.scale < 50 ? l.scale : DEFAULT_LOOK.scale,
+      ...(l.comma === true ? { comma: true as const } : {}),
     };
   }
   c.nextId = isNum(raw.nextId) && raw.nextId >= 1 ? Math.floor(raw.nextId) : 1;
@@ -295,15 +332,27 @@ export function freeName(c: Circuit, base: string): string {
   for (let k = 2; ; k++) if (!deviceByName(c, `${bare} ${k}`)) return `${bare} ${k}`;
 }
 
+/** A name for a new device of a symbol: its letter and the first number free, as R1, R2, C1. */
+export function numberedName(c: Circuit, ref: string): string {
+  const stem = ref.trim().replace(/\s*\d+$/, "") || "X";
+  for (let k = 1; ; k++) if (!deviceByName(c, `${stem}${k}`)) return `${stem}${k}`;
+}
+
 /** The wires at a pin. */
 export const wiresAt = (c: Circuit, e: WireEnd): Wire[] => c.wires.filter((w) => sameEnd(w.a, e) || sameEnd(w.b, e));
+
+/** Forgets how a bundle was laid by hand: it is laid the way found best again. */
+export function dropRoute(c: Circuit, key: string): void {
+  delete c.routes[key];
+  if (c.axes) delete c.axes[key];
+}
 
 /** Takes a device out, with its wires and the routes of their bundles. */
 export function removeDevice(c: Circuit, id: string): void {
   c.devices = c.devices.filter((d) => d.id !== id);
   const gone = c.wires.filter((w) => w.a.dev === id || w.b.dev === id);
   c.wires = c.wires.filter((w) => !gone.includes(w));
-  for (const w of gone) delete c.routes[bundleKey(w)];
+  for (const w of gone) dropRoute(c, bundleKey(w));
 }
 
 /** Takes wires out; a bundle with none left loses its route. */
@@ -311,7 +360,7 @@ export function removeWires(c: Circuit, ids: Set<string>): void {
   const gone = c.wires.filter((w) => ids.has(w.id));
   c.wires = c.wires.filter((w) => !ids.has(w.id));
   const left = new Set(c.wires.map(bundleKey));
-  for (const w of gone) if (!left.has(bundleKey(w))) delete c.routes[bundleKey(w)];
+  for (const w of gone) if (!left.has(bundleKey(w))) dropRoute(c, bundleKey(w));
 }
 
 /** Renames a pin or a port of a part on every wire that names it. */

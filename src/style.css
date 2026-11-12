@@ -814,21 +814,52 @@ image.picture { pointer-events: none; }
 .cw-straight { fill: none; stroke: var(--mark); stroke-width: 1; stroke-dasharray: 6 4; pointer-events: none; }
 .cw-ghost { opacity: 0.55; pointer-events: none; }
 
-/* The library: a picture and a name for each part. */
-.cw-sub { margin: 10px 0 4px; font-size: 12px; font-weight: 600; color: var(--ink-2); text-transform: uppercase; letter-spacing: 0.04em; }
-.cw-lib { display: flex; flex-direction: column; gap: 4px; }
-.cw-part { display: flex; align-items: stretch; gap: 2px; }
-.cw-part-btn { flex: 1; min-width: 0; display: flex; align-items: center; gap: 10px; padding: 4px 8px 4px 4px; text-align: left; background: var(--paper); border: 1px solid var(--rule); border-radius: 6px; }
-.cw-part-btn:hover { border-color: var(--ink-2); }
-.cw-part-btn > span { display: flex; flex-direction: column; min-width: 0; }
-.cw-part-btn b { font-size: 13px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.cw-part-btn small { font-size: 11.5px; color: var(--ink-2); }
-.cw-thumb { flex: none; background: #f6f7f5; border-radius: 4px; }
-.cw-part-tools { display: flex; flex-direction: column; gap: 2px; }
-.cw-mini { width: 26px; flex: 1; min-height: 22px; display: grid; place-items: center; padding: 0; background: var(--paper); border: 1px solid var(--rule); border-radius: 5px; color: var(--ink-2); }
+/* The library: a search field, and sections that open to a grid of tiles, each a picture with its name under it. */
+.panel h3.cw-lib-title { margin-top: 14px; }
+.cw-search { position: relative; margin: 0 0 8px; }
+.cw-search svg { position: absolute; left: 8px; top: 50%; transform: translateY(-50%); color: var(--ink-2); pointer-events: none; }
+.cw-search input { width: 100%; height: 32px; padding: 0 8px 0 30px; border: 1px solid var(--rule); border-radius: 6px; font: inherit; font-size: 13.5px; background: var(--paper); color: var(--ink); }
+.cw-search input:focus { outline: 2px solid var(--blue); outline-offset: -1px; }
+.cw-cat { margin-bottom: 6px; border: 1px solid var(--rule); border-radius: 7px; background: var(--board-hi); overflow: hidden; }
+.cw-cat.open { background: var(--paper); }
+.cw-cat-head { display: flex; align-items: center; gap: 9px; width: 100%; min-height: 36px; padding: 6px 10px; border: 0; background: none; color: var(--ink); text-align: left; font: inherit; font-size: 13.5px; font-weight: 600; cursor: pointer; }
+.cw-cat-head:hover { background: var(--board-lo); }
+.cw-cat.open .cw-cat-head { background: var(--board-hi); }
+.cw-chev { flex: none; width: 7px; height: 7px; margin: 0 2px 0 3px; border-right: 1.8px solid var(--ink-2); border-bottom: 1.8px solid var(--ink-2); transform: rotate(-45deg); transition: transform 0.12s; }
+.cw-cat.open .cw-chev { transform: translateY(-2px) rotate(45deg); }
+.cw-cat-name { flex: 1; min-width: 0; }
+.cw-count { padding: 1px 7px; border-radius: 9px; background: var(--board); color: var(--ink-2); font-size: 11.5px; font-weight: 500; }
+.cw-cat-body { padding: 0 8px 10px; border-top: 1px solid var(--rule); }
+.cw-cat-note { margin: 8px 2px; font-size: 12px; line-height: 1.35; color: var(--ink-2); }
+.cw-style { margin: 0 0 4px; }
+.cw-sub { margin: 10px 2px 5px; font-size: 11px; font-weight: 600; color: var(--ink-2); text-transform: uppercase; letter-spacing: 0.05em; }
+.cw-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; }
+.cw-grid.sym { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 5px; }
+.cw-grid + .cw-grid { margin-top: 6px; }
+.cw-tile { position: relative; display: flex; flex-direction: column; gap: 3px; min-width: 0; padding: 4px 4px 5px; border: 1px solid var(--rule); border-radius: 6px; background: var(--paper); color: var(--ink); font: inherit; cursor: pointer; }
+.cw-tile:hover { border-color: var(--ink-2); box-shadow: 0 1px 4px rgba(23, 32, 27, 0.14); }
+.cw-tile[aria-pressed="true"] { border-color: var(--sel); box-shadow: 0 0 0 2px rgba(226, 87, 10, 0.28); }
+.cw-pic { display: grid; place-items: center; border-radius: 4px; background: #f3f5f2; overflow: hidden; }
+.cw-tile.sym .cw-pic { background: none; }
+.cw-pic .cw-thumb { display: block; width: 100%; height: auto; }
+.cw-tname { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; min-height: 2.5em; overflow: hidden; font-size: 12px; font-weight: 500; line-height: 1.25; text-align: center; overflow-wrap: anywhere; }
+.cw-tile.sym { padding: 4px 2px 5px; }
+.cw-tile.sym .cw-tname { font-size: 10.5px; letter-spacing: -0.01em; overflow-wrap: break-word; hyphens: auto; }
+.cw-used { position: absolute; top: 3px; right: 3px; min-width: 16px; height: 16px; padding: 0 4px; border-radius: 8px; background: var(--ink); color: var(--paper); font-size: 10.5px; font-weight: 600; line-height: 16px; text-align: center; }
+.cw-own { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.cw-own .cw-tile { flex: 1; }
+.cw-tile-tools { display: flex; gap: 3px; }
+.cw-mini { flex: 1; min-width: 0; height: 24px; display: grid; place-items: center; padding: 0; background: var(--paper); border: 1px solid var(--rule); border-radius: 5px; color: var(--ink-2); cursor: pointer; }
 .cw-mini:hover { color: var(--ink); border-color: var(--ink-2); }
-.cw-preview { display: grid; place-items: center; margin: 4px 0 8px; }
-.cw-preview .cw-thumb { width: 100%; height: auto; max-width: 260px; }
+.cw-own-row { margin-top: 8px; }
+.cw-none { margin-top: 6px; }
+.cw-back { display: inline-flex; align-items: center; gap: 3px; margin: -4px 0 8px -6px; padding: 3px 9px 3px 4px; border: 0; border-radius: 5px; background: none; color: var(--ink-2); font: inherit; font-size: 12.5px; font-weight: 500; cursor: pointer; }
+.cw-back:hover { background: var(--board-lo); color: var(--ink); }
+/* A part in hand: how it will be put down, over the library to pick another from. */
+.cw-placing { margin-bottom: 2px; padding-bottom: 4px; border-bottom: 1px solid var(--rule); }
+.cw-placing h2 { margin-bottom: 4px; }
+.cw-preview { display: grid; place-items: center; margin: 0 0 8px; border-radius: 6px; background: #f3f5f2; }
+.cw-preview .cw-thumb { display: block; width: 100%; height: auto; }
 
 /* Ports, wires and colours in the panel. */
 .cw-port { margin: 6px 0 10px; }
@@ -837,6 +868,7 @@ image.picture { pointer-events: none; }
 .cw-port ul { list-style: none; margin: 4px 0 0; padding: 0; display: flex; flex-direction: column; gap: 3px; }
 .cw-port li { display: flex; align-items: center; gap: 8px; font-size: 12.5px; }
 .cw-tag { display: inline-block; min-width: 46px; padding: 1px 6px; border-radius: 3px; font: 600 11.5px/1.5 "Helvetica Neue", Arial, sans-serif; text-align: center; }
+.cw-tag.plain { background: var(--board); color: var(--ink); }
 .cw-to { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .cw-ends { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; font-weight: 600; font-size: 13px; }
 .cw-wires { list-style: none; margin: 4px 0 8px; padding: 0; display: flex; flex-direction: column; gap: 2px; }
@@ -856,6 +888,8 @@ button.link { padding: 0; border: 0; background: none; color: var(--blue); text-
 .part-banner-label { font-weight: 600; white-space: nowrap; }
 .part-banner input { width: 180px; height: 30px; padding: 0 8px; border: 1px solid var(--rule); border-radius: 5px; font: inherit; }
 .part-banner-note { font-size: 12.5px; color: var(--ink-2); }
+.part-banner-check { flex: none; white-space: nowrap; font-size: 13px; }
+#circuit-empty .empty-actions { display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; }
 @media (max-width: 900px) { .part-banner-note { display: none; } }
 
 /* Links among the tabs: to the other page of the app. */

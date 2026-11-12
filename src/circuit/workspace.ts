@@ -13,17 +13,19 @@ import { primsToSvg, primsToTikz, figureBounds } from "../export";
 import { icon } from "../icons";
 import {
   type Circuit, type Device, type PartDef, type Wire, type WireEnd, type GuideText, type Look,
-  newCircuit, circuitId, partOf, deviceById, freeName, removeDevice, removeWires, sameEnd, pairPins, bundleKey,
+  newCircuit, circuitId, partOf, deviceById, freeName, numberedName, removeDevice, removeWires, dropRoute, sameEnd, pairPins, bundleKey, keyedEnds,
   wireColor, pinKind, NAMED_COLORS, colorName, PIN_KINDS,
 } from "./model";
-import { STARTER, starterPart, useStarter, exampleCircuit, EXAMPLE_CSV } from "./starter";
+import { peekStarter, useStarter, exampleCircuit, exampleDiagram, EXAMPLE_CSV } from "./starter";
 import { readCsv, writeCsv, applyCsv } from "./csv";
 import { readComponent, writeComponent } from "./component";
-import { placePrims, scalePrims } from "./art";
+import { placePrims, scalePrims, plainWidths } from "./art";
 import {
   type Layout, type BundlePlace, type TagPlace, TAG,
-  layout, guideLayers, guidePrims, partPrims, captionPrims, guideTextPrims, captionOffset, describeEnd, redrawPart,
+  layout, guideLayers, guidePrims, partPrims, captionPrims, guideTextPrims, captionOffset, describeEnd, redrawPart, designator,
 } from "./figure";
+import { type LibraryState, libraryHtml, loadLibraryState, saveLibraryState, thumb } from "./library";
+import { SYM, JUNCTION_KEY } from "./symbols";
 import PHOTO_HOWTO from "../../docs/pcb-photo-to-component.md?raw";
 import { axisOf, distToPolyline, leftOf, type Box } from "./route";
 
@@ -63,7 +65,7 @@ type Drag =
   | { kind: "pan"; last: V; moved: boolean; start: V; clear: boolean }
   | { kind: "box"; a: V; b: V; add: boolean }
   | { kind: "move"; start: V; from: { id: string; x: number; y: number }[]; grabbed: string; moved: boolean; click: Sel }
-  | { kind: "segment"; key: string; index: number; axis: "h" | "v"; start: V; base: number[]; moved: boolean; click: Sel }
+  | { kind: "segment"; key: string; index: number; axis: "h" | "v"; start: V; base: number[]; moved: boolean; click: Sel; first: "h" | "v" | null }
   | { kind: "text"; id: string; start: V; from: V; moved: boolean }
   | { kind: "caption"; id: string; start: V; from: V; moved: boolean }
   /** A stroke dragged with the Cut tool: what it crosses is taken out when it is let go. */
@@ -109,22 +111,6 @@ function boundsOf(prims: Prim[], boxes: Box[]): Box {
   return { x0, y0, x1, y1 };
 }
 
-const thumbs = new WeakMap<PartDef, string>();
-/** A small picture of a part for the library. */
-function thumb(part: PartDef, w = 64, h = 44): string {
-  const had = thumbs.get(part);
-  if (had) return had;
-  const k = Math.min((w - 6) / part.w, (h - 6) / part.h);
-  const view = { cx: 0, cy: 0, scale: k, w, h };
-  let svg = "";
-  try {
-    svg = drawPrims({ view, mm: 1, prims: partPrims(part), selection: NONE, related: NONE, hover: null, conflicting: NONE, redundant: NONE, freeIds: NONE });
-  } catch { /* a drawing that cannot be drawn shows empty */ }
-  const out = `<svg class="cw-thumb" viewBox="0 0 ${w} ${h}" width="${w}" height="${h}" aria-hidden="true">${svg}</svg>`;
-  thumbs.set(part, out);
-  return out;
-}
-
 export class CircuitWorkspace {
   private view = { cx: 0, cy: 0, scale: 4 };
   private size: V = [800, 600];
@@ -142,7 +128,10 @@ export class CircuitWorkspace {
   private fitted = false;
   private layers = { page: "", under: "", parts: "", over: "", tags: "", text: "" };
   private bounds: Box = { x0: -50, y0: -50, x1: 50, y1: 50 };
-  private partSvg = new Map<string, string>();
+  /** Each part's drawing as markup, plain and mirrored: kept by the part itself, so no two parts can share one. */
+  private partSvg = new WeakMap<PartDef, [string?, string?]>();
+  /** What of the library is open, searched for and in hand. */
+  private lib: LibraryState = loadLibraryState();
   private focusNext: string | null = null;
   /** The final view: the guide on its paper, as it is exported, with nothing else drawn and nothing to edit. */
   private preview = false;
@@ -208,7 +197,7 @@ export class CircuitWorkspace {
     this.drag = null;
     this.hover = { kind: "none" };
     this.stale = true;
-    this.partSvg.clear();
+    this.partSvg = new WeakMap();
   }
 
   /** The workspace comes on screen. */
@@ -277,12 +266,13 @@ export class CircuitWorkspace {
 
   /** A part's drawing as markup, about its middle: drawn once and kept. */
   private partMarkup(part: PartDef, flip: boolean): string {
-    const key = `${part.id}|${flip ? 1 : 0}`;
-    let m = this.partSvg.get(key);
+    let kept = this.partSvg.get(part);
+    if (!kept) this.partSvg.set(part, (kept = []));
+    const i = flip ? 1 : 0;
+    let m = kept[i];
     if (m === undefined) {
       const prims = flip ? placePrims(partPrims(part), { turn: 0, flip: true, by: [0, 0] }) : partPrims(part);
-      m = markup(prims);
-      this.partSvg.set(key, m);
+      m = kept[i] = markup(prims);
     }
     return m;
   }
@@ -362,6 +352,8 @@ export class CircuitWorkspace {
     let out = "";
     // While drawing, each device shows the name the wires and the connection list know it by.
     for (const d of L.devices) {
+      // A symbol's own caption names it.
+      if (d.part.symbol) continue;
       const at = S([d.box.x0, d.box.y1]);
       const label = esc(d.dev.name);
       const wpx = d.dev.name.length * 6.1 + 10;
@@ -381,7 +373,7 @@ export class CircuitWorkspace {
       if (hv.kind === "device" && this.tool === "select") {
         const d = L.devices.find((x) => x.dev.id === hv.id);
         if (d) out += rect(d.box, "cw-hover");
-      } else if (hv.kind === "wire" && (this.tool === "select")) {
+      } else if (hv.kind === "wire" && (this.tool === "select" || (this.tool === "wire" && this.joinable(hv)))) {
         const got = wireLine(hv.id);
         if (got) out += glowLine(got.line, got.width, "cw-wire-hover");
       } else if (hv.kind === "text" || hv.kind === "caption") {
@@ -515,7 +507,7 @@ export class CircuitWorkspace {
     if (this.tool === "cut") return "cut";
     if (this.tool === "place" || this.tool === "text") return "place";
     const h = this.hover;
-    if (this.tool === "wire" || this.tool === "bundle") return h.kind === "pin" ? "pointer" : "pan";
+    if (this.tool === "wire" || this.tool === "bundle") return h.kind === "pin" || (h.kind === "wire" && this.tool === "wire" && this.joinable(h)) ? "pointer" : "pan";
     if (h.kind === "device" || h.kind === "text" || h.kind === "caption") return "move";
     if (h.kind === "wire") return h.seg >= 0 ? (this.segmentAxis(h.key, h.seg) === "h" ? "ns" : "ew") : "pointer";
     return "pan";
@@ -524,8 +516,16 @@ export class CircuitWorkspace {
   hint(): string {
     if (this.preview) return "Final view: the guide on its paper, as it is exported. Press Q or Esc to go back to drawing.";
     if (this.tool === "cut") return "Drag across wires to cut them out, or click one. Esc puts the tool down.";
-    if (this.tool === "place") return "Click where the part goes. R turns it, F mirrors it; hold Shift to place more than one. Esc puts it down.";
-    if (this.tool === "wire") return this.from ? `From ${describeEnd(this.c(), this.from)}: click the pin it goes to. Esc lets go.` : "Click a pin's tag, then the tag it is wired to.";
+    if (this.tool === "place") {
+      return this.placingPart()?.symbol
+        ? "Click where the symbol goes; it stays in hand for the next one. R turns it, F mirrors it. Esc puts it down."
+        : "Click where the part goes. R turns it, F mirrors it; hold Shift to place more than one. Esc puts it down.";
+    }
+    if (this.tool === "wire") {
+      const h = this.hover;
+      if (h.kind === "wire" && this.joinable(h)) return this.from ? "Click to end the wire on this one: a junction is put there." : "Click to start a wire from this one: a junction is put there.";
+      return this.from ? `From ${describeEnd(this.c(), this.from)}: click the pin it goes to, or a wire of a circuit diagram to join onto it. Esc lets go.` : "Click a pin, then the pin it is wired to. On a circuit diagram, a click on a wire joins onto it.";
+    }
     if (this.tool === "bundle") return this.from ? `From port ${this.from.port} of ${deviceById(this.c(), this.from.dev)?.name ?? ""}: click a tag of the port it plugs into. Pins are paired by what they do.` : "Click a tag of one port, then a tag of the port it plugs into: every pin is wired to the one it goes with.";
     if (this.tool === "text") return "Click where the text goes.";
     const h = this.hover;
@@ -608,9 +608,15 @@ export class CircuitWorkspace {
       const got = pin();
       if (got) return got;
     }
+    // A junction is a point where wires end: it is found before them, or it could not be picked up.
+    if (!wiring) {
+      for (const d of [...L.devices].reverse()) {
+        if (d.part.ports.some((p) => p.free) && Math.hypot(d.dev.x - q[0], d.dev.y - q[1]) < Math.max(0.6, 6 / z)) return { kind: "device", id: d.dev.id };
+      }
+    }
     const over = wire(true);
     if (over) return over;
-    for (const d of [...L.devices].reverse()) if (inside(d.box)) return { kind: "device", id: d.dev.id };
+    for (const d of [...L.devices].reverse()) if (inside(d.box, d.part.symbol ? Math.max(0.3, 3 / z) : 0)) return { kind: "device", id: d.dev.id };
     return wire(false) ?? { kind: "none" };
   }
 
@@ -628,7 +634,7 @@ export class CircuitWorkspace {
   /** The axis a middle stretch of a bundle runs along. */
   private segmentAxis(key: string, index: number): "h" | "v" {
     const bd = this.L?.bundles.find((b) => b.key === key);
-    const first = bd ? axisOf(bd.a.out) : "h";
+    const first = bd ? axisOf(bd.ua) : "h";
     // Stretch 0 runs along the first axis; place `index` is stretch index + 1.
     return (index + 1) % 2 === 0 ? first : first === "h" ? "v" : "h";
   }
@@ -656,7 +662,11 @@ export class CircuitWorkspace {
     const q = this.toGuide(sp);
     if (this.tool === "place") return this.place(ev.shiftKey);
     if (this.tool === "text") {
-      const t: GuideText = { id: circuitId(c, "t"), x: snap(q[0], 0.5), y: snap(q[1], 0.5), text: "Text", size: 3, bold: true, align: "start" };
+      // On a circuit diagram, text is set as its labels are; on a wiring guide, in bold sans.
+      const diagram = c.devices.length > 0 && c.devices.every((d) => partOf(c, d)?.symbol);
+      const t: GuideText = diagram
+        ? { id: circuitId(c, "t"), x: snap(q[0], 0.5), y: snap(q[1], 0.5), text: "Text", size: Number(SYM.font.toFixed(3)), align: "start", serif: true }
+        : { id: circuitId(c, "t"), x: snap(q[0], 0.5), y: snap(q[1], 0.5), text: "Text", size: 3, bold: true, align: "start" };
       c.texts.push(t);
       this.sel = { kind: "text", id: t.id };
       this.tool = "select";
@@ -665,6 +675,7 @@ export class CircuitWorkspace {
     }
     const h = this.hit(sp);
     if (this.tool === "wire" || this.tool === "bundle") {
+      if (h.kind === "wire" && this.tool === "wire" && this.joinable(h)) return this.joinWire(h, q);
       if (h.kind !== "pin") {
         this.drag = { kind: "pan", last: sp, moved: false, start: sp, clear: true };
         return;
@@ -685,7 +696,8 @@ export class CircuitWorkspace {
       const click: Sel = { kind: "wire", id: h.id };
       if (h.seg >= 0) {
         const bd = this.L!.bundles.find((b) => b.key === h.key)!;
-        this.drag = { kind: "segment", key: h.key, index: h.seg, axis: this.segmentAxis(h.key, h.seg), start: q, base: [...bd.places], moved: false, click };
+        const free = !!(bd.a.port.free || bd.b.port.free);
+        this.drag = { kind: "segment", key: h.key, index: h.seg, axis: this.segmentAxis(h.key, h.seg), start: q, base: [...bd.places], moved: false, click, first: free ? axisOf(bd.ua) : null };
       } else {
         this.sel = click;
         this.host.touch();
@@ -750,9 +762,10 @@ export class CircuitWorkspace {
     d.moved = true;
     if (d.kind === "move") {
       const g = d.from.find((f) => f.id === d.grabbed)!;
-      // The device grabbed lands on the half-millimetre grid; the others keep their places against it.
-      let dx = (ev.altKey ? g.x + delta[0] : snap(g.x + delta[0], 0.5)) - g.x;
-      let dy = (ev.altKey ? g.y + delta[1] : snap(g.y + delta[1], 0.5)) - g.y;
+      // The device grabbed lands on the grid, a symbol on whole millimetres so its pins meet others'; the rest keep their places against it.
+      const step = this.gridOf(deviceById(c, g.id));
+      let dx = (ev.altKey ? g.x + delta[0] : snap(g.x + delta[0], step)) - g.x;
+      let dy = (ev.altKey ? g.y + delta[1] : snap(g.y + delta[1], step)) - g.y;
       for (const f of d.from) { const dev = deviceById(c, f.id)!; dev.x = f.x + dx; dev.y = f.y + dy; }
       if (!ev.altKey) {
         // Near enough to running straight, a bundle is pulled straight.
@@ -768,6 +781,8 @@ export class CircuitWorkspace {
       const v = d.base[d.index] + (d.axis === "h" ? delta[1] : delta[0]);
       places[d.index] = ev.altKey ? v : snap(v, 0.5);
       c.routes[d.key] = places;
+      // A junction does not say which way its wires leave: the way this bundle does is kept with its course.
+      if (d.first) (c.axes ??= {})[d.key] = d.first;
       this.sel = { kind: "bundle", key: d.key };
       this.stale = true;
       return this.host.render();
@@ -799,9 +814,9 @@ export class CircuitWorkspace {
       const ma = moving.includes(bd.a.dev.id), mb = moving.includes(bd.b.dev.id);
       if (ma === mb) continue;
       // Ports that face each other along one axis.
-      if (axisOf(bd.a.out) !== axisOf(bd.b.out) || bd.a.out[0] * bd.b.out[0] + bd.a.out[1] * bd.b.out[1] > -0.5) continue;
+      if (axisOf(bd.ua) !== axisOf(bd.ub) || bd.ua[0] * bd.ub[0] + bd.ua[1] * bd.ub[1] > -0.5) continue;
       const pa = bd.ends.map((e) => e[0].anchor), pb = bd.ends.map((e) => e[1].anchor);
-      const across = leftOf(bd.a.out);
+      const across = leftOf(bd.ua);
       const ca = pa.reduce((s, p) => s + p[0] * across[0] + p[1] * across[1], 0) / pa.length;
       const cb = pb.reduce((s, p) => s + p[0] * across[0] + p[1] * across[1], 0) / pb.length;
       const off = ma ? cb - ca : ca - cb;
@@ -892,6 +907,12 @@ export class CircuitWorkspace {
     if (h.kind === "device") {
       const d = deviceById(this.c(), h.id);
       const part = d && partOf(this.c(), d);
+      // A symbol's value is what is wanted next; a part drawn here opens in the sketcher.
+      if (part?.symbol && d) {
+        this.sel = { kind: "devices", ids: [d.id] };
+        this.focusNext = part.unit ? "dev-value" : "dev-caption";
+        return this.host.touch();
+      }
       if (part?.sketch) return this.host.editPart(part.id);
     }
     if (h.kind === "text") { this.focusNext = "text-text"; return this.host.touch(); }
@@ -914,7 +935,10 @@ export class CircuitWorkspace {
       return this.host.touch();
     }
     this.from = null;
-    if (this.tool === "wire") {
+    const port = (e: WireEnd) => { const d = deviceById(c, e.dev); return partOf(c, d!)?.ports.find((p) => p.name === e.port); };
+    const pa = port(a), pb = port(end);
+    // Two ports of a single pin each, as on symbols, are plugged together by wiring the two pins.
+    if (this.tool === "wire" || (pa?.pins.length === 1 && pb?.pins.length === 1)) {
       if (c.wires.some((w) => (sameEnd(w.a, a) && sameEnd(w.b, end)) || (sameEnd(w.a, end) && sameEnd(w.b, a)))) return this.host.toast("Those two pins are wired already.");
       const w: Wire = { id: circuitId(c, "w"), a, b: end };
       c.wires.push(w);
@@ -923,8 +947,6 @@ export class CircuitWorkspace {
       return this.changed();
     }
     // Two ports: every pin wired to the one it goes with.
-    const port = (e: WireEnd) => { const d = deviceById(c, e.dev); return partOf(c, d!)?.ports.find((p) => p.name === e.port); };
-    const pa = port(a), pb = port(end);
     if (!pa || !pb) return;
     const pairs = pairPins(pa.pins.map((p) => p.name), pb.pins.map((p) => p.name));
     if (!pairs.length) return this.host.toast(`Nothing on ${pa.name} goes with anything on ${pb.name}: wire them pin by pin with the Wire tool.`);
@@ -941,17 +963,78 @@ export class CircuitWorkspace {
     this.changed();
   }
 
+  /** Whether the Wire tool can join onto the wire: a wire of a circuit diagram takes a junction where it is clicked. */
+  private joinable(h: Extract<Hit, { kind: "wire" }>): boolean {
+    return !!this.L?.bundles.find((b) => b.key === h.key)?.schematic;
+  }
+
+  /**
+   * With the Wire tool on a wire of a circuit diagram: a junction is put on
+   * it at the click, on the millimetre grid along its stretch, and the wire
+   * is carried through it. The wire being drawn ends on the junction, or a
+   * new one starts from it. A click right by an end of the wire is a click on
+   * the pin there.
+   */
+  private joinWire(h: Extract<Hit, { kind: "wire" }>, q: V): void {
+    const c = this.c();
+    const bd = this.L?.bundles.find((b) => b.key === h.key);
+    const i = bd ? bd.wires.findIndex((w) => w.id === h.id) : -1;
+    if (!bd || i < 0) return;
+    const line = bd.lines[i];
+    const clamp = (v: number, a: number, b: number) => Math.max(Math.min(a, b), Math.min(Math.max(a, b), v));
+    let best: V = line[0], bestD = Infinity;
+    for (let k = 0; k + 1 < line.length; k++) {
+      const a = line[k], b = line[k + 1];
+      const ab: V = [b[0] - a[0], b[1] - a[1]];
+      const len2 = ab[0] * ab[0] + ab[1] * ab[1];
+      if (len2 < 1e-9) continue;
+      const t = Math.max(0, Math.min(1, ((q[0] - a[0]) * ab[0] + (q[1] - a[1]) * ab[1]) / len2));
+      let p: V = [a[0] + ab[0] * t, a[1] + ab[1] * t];
+      if (Math.abs(ab[1]) < 1e-6) p = [clamp(snap(p[0], SYM.grid), a[0], b[0]), a[1]];
+      else if (Math.abs(ab[0]) < 1e-6) p = [a[0], clamp(snap(p[1], SYM.grid), a[1], b[1])];
+      const d = Math.hypot(q[0] - p[0], q[1] - p[1]);
+      if (d < bestD) { bestD = d; best = p; }
+    }
+    const w = bd.wires[i];
+    const ends = keyedEnds(w);
+    for (const k of [0, 1] as const) {
+      const at = bd.ends[i][k].anchor;
+      if (Math.hypot(at[0] - best[0], at[1] - best[1]) < 0.75) return this.wireClick(ends[k]);
+    }
+    const part = useStarter(c, JUNCTION_KEY, () => circuitId(c, "p"));
+    if (!part?.ports.length) return;
+    const j: Device = { id: circuitId(c, "d"), part: part.id, name: numberedName(c, part.ref), x: best[0], y: best[1], turn: 0 };
+    c.devices.push(j);
+    const end: WireEnd = { dev: j.id, port: part.ports[0].name, pin: part.ports[0].pins[0].name };
+    removeWires(c, new Set([w.id]));
+    const keep = w.color ? { color: w.color } : {};
+    c.wires.push({ id: circuitId(c, "w"), a: w.a, b: end, ...keep, ...(w.label ? { label: w.label } : {}) }, { id: circuitId(c, "w"), a: end, b: w.b, ...keep });
+    if (this.from) {
+      c.wires.push({ id: circuitId(c, "w"), a: this.from, b: end });
+      this.host.toast(`Joined ${describeEnd(c, this.from)} onto the wire.`);
+      this.from = null;
+    } else this.from = end;
+    this.sel = null;
+    this.changed();
+  }
+
   private placingPart(): PartDef | null {
     const p = this.placing;
     if (!p) return null;
     if (p.part) return this.c().parts.find((x) => x.id === p.part) ?? null;
-    return p.starter ? starterPart(p.starter) ?? null : null;
+    return p.starter ? peekStarter(this.c(), p.starter) ?? null : null;
   }
 
-  /** Where the part being placed goes: its middle under the pointer, on the half-millimetre grid. */
+  /** The grid a device is placed and moved on: whole millimetres for a symbol, so pins meet pins; half of one otherwise. */
+  private gridOf(d: Device | undefined): number {
+    return d && partOf(this.c(), d)?.symbol ? SYM.grid : 0.5;
+  }
+
+  /** Where the part being placed goes: its middle under the pointer, on its grid. */
   private placeAt(): V {
     const q = this.toGuide(this.cursor);
-    return [snap(q[0], 0.5), snap(q[1], 0.5)];
+    const step = this.placingPart()?.symbol ? SYM.grid : 0.5;
+    return [snap(q[0], step), snap(q[1], step)];
   }
 
   private place(more: boolean): void {
@@ -961,11 +1044,17 @@ export class CircuitWorkspace {
     const part = p.part ? c.parts.find((x) => x.id === p.part) : p.starter ? useStarter(c, p.starter, () => circuitId(c, "p")) : null;
     if (!part) return;
     const [x, y] = this.placeAt();
-    const d: Device = { id: circuitId(c, "d"), part: part.id, name: freeName(c, part.ref), x, y, turn: p.turn, ...(p.flip ? { flip: true } : {}) };
+    const d: Device = { id: circuitId(c, "d"), part: part.id, name: part.symbol ? numberedName(c, part.ref) : freeName(c, part.ref), x, y, turn: p.turn, ...(p.flip ? { flip: true } : {}) };
     c.devices.push(d);
-    this.sel = { kind: "devices", ids: [d.id] };
-    if (!more) { this.placing = null; this.tool = "select"; }
-    else this.placing = { part: part.id, turn: p.turn, flip: p.flip };
+    // A diagram takes many of one symbol: a symbol stays in hand until it is put down. A part is placed once, unless Shift is held.
+    if (more || part.symbol) {
+      this.sel = null;
+      this.placing = { ...(p.starter ? { starter: p.starter } : { part: part.id }), turn: p.turn, flip: p.flip };
+    } else {
+      this.sel = { kind: "devices", ids: [d.id] };
+      this.placing = null;
+      this.tool = "select";
+    }
     this.changed();
   }
 
@@ -996,7 +1085,7 @@ export class CircuitWorkspace {
     if (this.tool === "place" && this.placing) {
       if (flip) this.placing.flip = !this.placing.flip;
       else this.placing.turn = (((this.placing.turn + step) % 4) + 4) % 4 as 0 | 1 | 2 | 3;
-      return this.host.render();
+      return this.host.touch();
     }
     const devs = this.selectedDevices();
     if (!devs.length) return;
@@ -1007,7 +1096,7 @@ export class CircuitWorkspace {
       else d.turn = (((d.turn + step) % 4) + 4) % 4 as 0 | 1 | 2 | 3;
       if (!d.flip) delete d.flip;
       delete d.cap;
-      for (const w of c.wires) if (w.a.dev === d.id || w.b.dev === d.id) delete c.routes[bundleKey(w)];
+      for (const w of c.wires) if (w.a.dev === d.id || w.b.dev === d.id) dropRoute(c, bundleKey(w));
     }
     this.changed();
   }
@@ -1030,7 +1119,8 @@ export class CircuitWorkspace {
     if (!devs.length) return;
     const ids: string[] = [];
     for (const d of devs) {
-      const copy: Device = { ...structuredClone(d), id: circuitId(c, "d"), name: freeName(c, d.name), x: d.x + 10, y: d.y - 10 };
+      const symbol = !!partOf(c, d)?.symbol;
+      const copy: Device = { ...structuredClone(d), id: circuitId(c, "d"), name: symbol ? numberedName(c, d.name) : freeName(c, d.name), x: d.x + 10, y: d.y - 10 };
       c.devices.push(copy);
       ids.push(copy.id);
     }
@@ -1075,9 +1165,9 @@ export class CircuitWorkspace {
     if (k === "r") { this.turnSelected(e.shiftKey ? -1 : 1); return true; }
     if (k === "f") { this.turnSelected(0, true); return true; }
     if (e.key.startsWith("Arrow") && this.sel) {
-      const step = e.shiftKey ? 5 : 0.5;
-      const [dx, dy] = e.key === "ArrowLeft" ? [-step, 0] : e.key === "ArrowRight" ? [step, 0] : e.key === "ArrowUp" ? [0, step] : [0, -step];
       const s = this.sel;
+      const step = e.shiftKey ? 5 : s.kind === "devices" && this.selectedDevices().every((d) => this.gridOf(d) === SYM.grid) ? SYM.grid : 0.5;
+      const [dx, dy] = e.key === "ArrowLeft" ? [-step, 0] : e.key === "ArrowRight" ? [step, 0] : e.key === "ArrowUp" ? [0, step] : [0, -step];
       if (s.kind === "devices") for (const d of this.selectedDevices()) { d.x += dx; d.y += dy; }
       else if (s.kind === "text") { const t = this.c().texts.find((x) => x.id === s.id); if (t) { t.x += dx; t.y += dy; } }
       else return false;
@@ -1140,8 +1230,10 @@ export class CircuitWorkspace {
     const k = c.look.scale;
     if (how === "svg") return primsToSvg([{ k: "region", layer: "fill", outlines: [{ kind: "path", start: [page.x0, page.y0], segs: [{ k: "L", to: [page.x1, page.y0] }, { k: "L", to: [page.x1, page.y1] }, { k: "L", to: [page.x0, page.y1] }, { k: "L", to: [page.x0, page.y0] }] }], color: "#ffffff" }, ...prims], k, page);
     // TikZ gets the guide at its size on paper, text and all, so small text is set at the size it is printed.
-    const tikz = primsToTikz(scalePrims(prims, k), 1, { x0: page.x0 * k, y0: page.y0 * k, x1: page.x1 * k, y1: page.y1 * k });
-    return tikz && `% A wiring guide. Its small text wants a font that scales, such as \\usepackage{lmodern}.\n${tikz}`;
+    const tikz = primsToTikz(plainWidths(scalePrims(prims, k)), 1, { x0: page.x0 * k, y0: page.y0 * k, x1: page.x1 * k, y1: page.y1 * k });
+    // A guide with tags has text of a few points; a circuit diagram at its usual size is all 10 pt.
+    const small = L.tags.length > 0 || Math.abs(k - 2) > 1e-6;
+    return tikz && (small ? `% Its small text wants a font that scales, such as \\usepackage{lmodern}.\n${tikz}` : tikz);
   }
 
   fileName(): string {
@@ -1161,7 +1253,7 @@ export class CircuitWorkspace {
   /** A part was drawn or changed in the sketcher: its drawing is kept, and a new one is ready to place. */
   partDrawn(part: PartDef, isNew: boolean): void {
     redrawPart(part);
-    this.partSvg.clear();
+    this.partSvg = new WeakMap();
     this.stale = true;
     if (isNew) this.startPlacing({ part: part.id });
   }
@@ -1196,7 +1288,7 @@ export class CircuitWorkspace {
   drawPanel(): void {
     const active = document.activeElement as HTMLInputElement | null;
     const had = active && this.panel.contains(active) ? active.dataset.cf ?? null : null;
-    const caret = had && active && (active.type === "text" || active.tagName === "TEXTAREA") ? [active.selectionStart, active.selectionEnd] : null;
+    const caret = had && active && (active.type === "text" || active.type === "search" || active.tagName === "TEXTAREA") ? [active.selectionStart, active.selectionEnd] : null;
     this.panel.innerHTML = this.panelHtml();
     const want = this.focusNext ?? had;
     this.focusNext = null;
@@ -1213,13 +1305,15 @@ export class CircuitWorkspace {
     const c = this.c();
     if (this.preview) return this.finalHtml();
     if (this.tool === "place") return this.placeHtml();
-    if (s?.kind === "devices" && s.ids.length === 1) return this.deviceHtml(deviceById(c, s.ids[0])!);
-    if (s?.kind === "devices") return `<h2>${s.ids.length} parts</h2><p class="muted">Drag one to move them all; R turns each, Delete takes them out with their wires.</p>` +
+    // What is selected has the panel; the library is a click away.
+    const back = `<button type="button" class="cw-back" data-cact="deselect" title="Back to the library (Esc)">${icon("chevron", 14)}<span>Library</span></button>`;
+    if (s?.kind === "devices" && s.ids.length === 1) return back + this.deviceHtml(deviceById(c, s.ids[0])!);
+    if (s?.kind === "devices") return back + `<h2>${s.ids.length} parts</h2><p class="muted">Drag one to move them all; R turns each, Delete takes them out with their wires.</p>` +
       `<div class="btn-row"><button type="button" class="plain" data-cact="turn">Turn</button><button type="button" class="plain" data-cact="dup">Duplicate</button></div>` +
       `<button type="button" class="danger" data-cact="delete">Delete</button>`;
-    if (s?.kind === "wire") { const w = c.wires.find((x) => x.id === s.id); if (w) return this.wireHtml(w); }
-    if (s?.kind === "bundle") return this.bundleHtml(s.key);
-    if (s?.kind === "text") { const t = c.texts.find((x) => x.id === s.id); if (t) return this.textHtml(t); }
+    if (s?.kind === "wire") { const w = c.wires.find((x) => x.id === s.id); if (w) return back + this.wireHtml(w); }
+    if (s?.kind === "bundle") return back + this.bundleHtml(s.key);
+    if (s?.kind === "text") { const t = c.texts.find((x) => x.id === s.id); if (t) return back + this.textHtml(t); }
     return this.guideHtml();
   }
 
@@ -1235,38 +1329,26 @@ export class CircuitWorkspace {
     return `<label class="field"><span>${label}</span>${input}${note ? `<small>${note}</small>` : ""}</label>`;
   }
 
+  /** The library with what is in hand lit up, and the buttons for parts of one's own under it. */
+  private libraryHtml(): string {
+    this.lib.placing = this.tool === "place" && this.placing ? { starter: this.placing.starter, part: this.placing.part } : null;
+    return libraryHtml(this.c(), this.lib) +
+      `<div class="btn-row cw-own-row"><button type="button" class="plain" data-cact="new-part">Draw a part</button><button type="button" class="plain" data-cact="import-part">Import a part</button></div>`;
+  }
+
   /** The panel with nothing selected: the library, the connection list and how the guide looks. */
   private guideHtml(): string {
     const c = this.c();
     const L = this.L;
-    let html = `<h2>Wiring guide</h2>`;
-    html += `<p class="muted">${c.devices.length} part${c.devices.length === 1 ? "" : "s"} placed, ${c.wires.length} wire${c.wires.length === 1 ? "" : "s"}.</p>`;
+    const symbols = c.devices.filter((d) => partOf(c, d)?.symbol).length;
+    const diagram = symbols > 0 && symbols === c.devices.length;
+    let html = `<h2>${diagram ? "Circuit diagram" : "Wiring guide"}</h2>`;
+    html += `<p class="muted">${c.devices.length} ${diagram ? "symbol" : "part"}${c.devices.length === 1 ? "" : "s"} placed, ${c.wires.length} wire${c.wires.length === 1 ? "" : "s"}.</p>`;
     const problems = [...this.problems, ...(L?.problems ?? [])];
     if (problems.length) {
       html += `<div class="cw-problems"><h3>Needs a look</h3><ul>${problems.slice(0, 12).map((p) => `<li>${esc(p)}</li>`).join("")}</ul>${this.problems.length ? `<button type="button" class="plain" data-cact="clear-problems">Done</button>` : ""}</div>`;
     }
-    html += `<h3>Parts</h3>`;
-    const own = c.parts;
-    const item = (attrs: string, part: PartDef, extra = "") =>
-      `<div class="cw-part"><button type="button" class="cw-part-btn" ${attrs} title="Place ${esc(part.name)}: click, then click where it goes">${thumb(part)}<span><b>${esc(part.name)}</b><small>${part.ports.length} port${part.ports.length === 1 ? "" : "s"}, ${part.ports.reduce((n, p) => n + p.pins.length, 0)} pins</small></span></button>${extra}</div>`;
-    if (own.length) {
-      html += `<p class="cw-sub">In this guide</p><div class="cw-lib">`;
-      for (const p of own) {
-        const used = c.devices.some((d) => d.part === p.id);
-        const tools = (p.sketch ? `<button type="button" class="cw-mini" data-cact="edit-part" data-id="${esc(p.id)}" title="Change its drawing in the sketcher">${icon("bezier", 16)}</button>` : "") +
-          (p.shapes ? `<button type="button" class="cw-mini" data-cact="save-part" data-id="${esc(p.id)}" title="Save it as a component file">${icon("partout", 16)}</button>` : "") +
-          (!used ? `<button type="button" class="cw-mini" data-cact="del-part" data-id="${esc(p.id)}" title="Take it out of the library">${icon("trash", 16)}</button>` : "");
-        html += item(`data-cact="place" data-id="${esc(p.id)}"`, p, `<span class="cw-part-tools">${tools}</span>`);
-      }
-      html += `</div>`;
-    }
-    const left = STARTER.filter((s) => !own.some((p) => p.starter === s.key));
-    if (left.length) {
-      html += `<p class="cw-sub">Starter parts</p><div class="cw-lib">`;
-      for (const s of left) html += item(`data-cact="place" data-starter="${s.key}"`, starterPart(s.key)!);
-      html += `</div>`;
-    }
-    html += `<div class="btn-row"><button type="button" class="plain" data-cact="new-part">Draw a part</button><button type="button" class="plain" data-cact="import-part">Import a part</button></div>`;
+    html += `<h3 class="cw-lib-title">Library</h3>` + this.libraryHtml();
     html += `<small class="under">A part file can be written from a photo of a board: give an AI chat the photo with these instructions, and import the file it writes.</small>` +
       `<div class="btn-row"><button type="button" class="plain" data-cact="copy-howto">Copy the instructions</button><button type="button" class="plain" data-cact="save-howto">Save them</button></div>`;
 
@@ -1275,11 +1357,13 @@ export class CircuitWorkspace {
     html += `<div class="btn-row"><button type="button" class="plain" data-cact="csv-in">Import a list</button><button type="button" class="plain" data-cact="csv-out"${c.wires.length ? "" : " disabled"}>Export the list</button></div>`;
 
     html += this.lookHtml();
-    html += `<h3>Colours</h3><div class="cw-legend">${PIN_KINDS.slice(0, 12).map((k) => `<span><i style="background:${k.bg}"></i>${esc(k.label)}</span>`).join("")}</div>`;
-    html += `<small class="under">A tag's colour is what its pin does, read from its name: GND, 5V, Tx, Rx, SCL, SDA and so on. A wire takes the colour of its first pin unless it is given its own.</small>`;
+    if (!diagram) {
+      html += `<h3>Colours</h3><div class="cw-legend">${PIN_KINDS.slice(0, 12).map((k) => `<span><i style="background:${k.bg}"></i>${esc(k.label)}</span>`).join("")}</div>`;
+      html += `<small class="under">A tag's colour is what its pin does, read from its name: GND, 5V, Tx, Rx, SCL, SDA and so on. A wire takes the colour of its first pin unless it is given its own.</small>`;
+    }
     if (!c.devices.length) {
-      html += `<h3>Example</h3><p class="muted">A quadcopter on a MicoAir H743 v2: a flight controller, a 4-in-1 ESC, four motors, GPS, receiver, video transmitter and buzzer, wired.</p>` +
-        `<button type="button" class="plain" data-cact="example">Open the example</button>`;
+      html += `<h3>Examples</h3><p class="muted">A quadcopter on a MicoAir H743 v2, wired as a manual shows it; and a transistor switching an LED, as a circuit diagram.</p>` +
+        `<div class="btn-row"><button type="button" class="plain" data-cact="example">Wiring guide</button><button type="button" class="plain" data-cact="example-diagram">Circuit diagram</button></div>`;
     }
     return html;
   }
@@ -1307,32 +1391,51 @@ export class CircuitWorkspace {
     html += this.choice("Edge round each wire", "casing", [["on", "Darker edge", look.casing], ["off", "None", !look.casing]]);
     html += this.choice("Pins with nothing wired", "unused", [["outline", "Outlined tags", look.unused === "outline"], ["hide", "No tags", look.unused === "hide"]]);
     html += `<label class="field"><span>Wire thickness (mm)</span><input data-cf="look-wire" type="number" min="0.1" max="3" step="0.05" value="${look.wire}"></label>`;
+    const c = this.c();
+    const symbols = c.devices.some((d) => partOf(c, d)?.symbol);
+    const pt = (mm: number) => shown(mm * look.scale * 2.845);
     html += `<label class="field"><span>Size on paper</span><span class="pair"><input data-cf="look-scale" type="number" min="0.2" max="20" step="0.1" value="${look.scale}" aria-label="Times its size in mm"><span>× its size in mm</span></span>` +
-      `<small>Tags are ${shown(TAG.w * look.scale)} mm tall on paper, their text ${shown(TAG.font * look.scale * 2.845)} pt. The export comes out this size.</small></label>`;
+      `<small>Tags are ${shown(TAG.w * look.scale)} mm tall on paper, their text ${pt(TAG.font)} pt.${symbols ? ` Circuit symbols have ${pt(SYM.font)} pt letters and ${pt(SYM.line)} pt lines; a resistor is ${shown(6 * look.scale)} mm long.` : ""} The export comes out this size.</small></label>`;
+    if (symbols) html += this.choice("Decimal sign in values", "comma", [["point", "4.7 kΩ", !look.comma], ["comma", "4,7 kΩ", !!look.comma]]);
     return html;
   }
 
+  /** The panel while a part is in hand: the part as it will be put down, and the library to pick another from. */
   private placeHtml(): string {
     const part = this.placingPart();
-    if (!part) return `<h2>Place</h2>`;
-    return `<h2>${esc(part.name)}</h2><div class="cw-preview">${thumb(part, 200, 140)}</div>` +
-      `<p class="muted">Click where it goes. R turns it, F mirrors it. Hold Shift while clicking to place more than one; Esc puts it down.</p>` +
-      `<div class="btn-row"><button type="button" class="plain" data-cact="turn">Turn</button><button type="button" class="plain" data-cact="flip">Mirror</button></div>` +
-      this.portsList(part, null);
+    const p = this.placing;
+    if (!part || !p) return this.guideHtml();
+    const pins = part.ports.reduce((n, q) => n + q.pins.length, 0);
+    return `<div class="cw-placing"><div class="cw-preview">${thumb(part, 216, 116, { cap: part.symbol ? 14 : undefined, turn: p.turn, flip: p.flip })}</div>` +
+      `<h2>${esc(part.name)}</h2>` +
+      `<p class="muted">${pins} pin${pins === 1 ? "" : "s"}${part.ports.length > 1 && !part.symbol ? ` on ${part.ports.length} ports` : ""}. Click on the guide where it goes. ` +
+      (part.symbol ? "It stays in hand for the next one." : "Hold Shift to place more than one.") + ` Esc puts it down.</p>` +
+      `<div class="btn-row"><button type="button" class="plain" data-cact="turn" title="Turn it a quarter turn (R)">Turn</button><button type="button" class="plain" data-cact="flip" aria-pressed="${p.flip}" title="Mirror it left to right (F)">Mirror</button><button type="button" class="plain" data-cact="tool-select" title="Put it down (Esc)">Done</button></div></div>` +
+      `<h3 class="cw-lib-title">Library</h3>` + this.libraryHtml();
   }
 
   /** The ports of a part, with what each pin is wired to on the guide. */
   private portsList(part: PartDef, dev: Device | null): string {
     const c = this.c();
-    let html = `<h3>Ports</h3>`;
-    if (!part.ports.length) return html + `<p class="muted">It has no ports: nothing can be wired to it.${part.sketch ? " Put pins on it with the Wire pin tool on the Annotate tab of its drawing." : ""}</p>`;
+    let html = `<h3>${part.symbol ? "Pins" : "Ports"}</h3>`;
+    if (!part.ports.length) {
+      return html + `<p class="muted">${part.symbol ? "It has no pins: it is put beside what it marks." : "It has no ports: nothing can be wired to it."}${part.sketch ? " Put pins on it with the Wire pin tool on the Annotate tab of its drawing." : ""}</p>`;
+    }
+    const wiredTo = (port: string, pin: string): string[] => (!dev ? [] : c.wires
+      .filter((w) => (w.a.dev === dev.id && w.a.port === port && w.a.pin === pin) || (w.b.dev === dev.id && w.b.port === port && w.b.pin === pin))
+      .map((w) => describeEnd(c, w.a.dev === dev.id && w.a.port === port && w.a.pin === pin ? w.b : w.a)));
+    const to = (other: string[]) => (other.length ? `<span class="cw-to">→ ${esc(other.join(", "))}</span>` : dev ? `<span class="cw-to muted">nothing</span>` : "");
+    if (part.symbol) {
+      // A symbol's pins are ports of their own: one list, in plain tags.
+      html += `<div class="cw-port"><ul>`;
+      for (const p of part.ports) for (const q of p.pins) html += `<li><span class="cw-tag plain">${esc(q.name)}</span>${to(wiredTo(p.name, q.name))}</li>`;
+      return html + `</ul></div>`;
+    }
     for (const p of part.ports) {
       html += `<div class="cw-port"><b>${esc(p.name)}</b><small>${p.kind === "pads" ? "solder pads" : "connector"}, ${p.side}</small><ul>`;
       for (const q of p.pins) {
         const k = pinKind(q.name);
-        const to = dev ? c.wires.filter((w) => (w.a.dev === dev.id && w.a.port === p.name && w.a.pin === q.name) || (w.b.dev === dev.id && w.b.port === p.name && w.b.pin === q.name)) : [];
-        const other = to.map((w) => describeEnd(c, w.a.dev === dev!.id && w.a.port === p.name && w.a.pin === q.name ? w.b : w.a));
-        html += `<li><span class="cw-tag" style="background:${k.bg};color:${k.fg}">${esc(q.name)}</span>${other.length ? `<span class="cw-to">→ ${esc(other.join(", "))}</span>` : dev ? `<span class="cw-to muted">nothing</span>` : ""}</li>`;
+        html += `<li><span class="cw-tag" style="background:${k.bg};color:${k.fg}">${esc(q.name)}</span>${to(wiredTo(p.name, q.name))}</li>`;
       }
       html += `</ul></div>`;
     }
@@ -1343,12 +1446,20 @@ export class CircuitWorkspace {
     const c = this.c();
     const part = partOf(c, d)!;
     let html = `<h2>${esc(part.name)}</h2>`;
-    html += this.text("Name", "dev-name", d.name, "What the connection list calls it. No two parts on the guide share a name.");
-    html += this.text("Caption", "dev-caption", d.caption ?? part.caption ?? "", "Written under it on the guide; a new line starts a new line. Drag it on the guide to move it.", true);
+    html += this.text("Name", "dev-name", d.name, part.symbol ? "What the connection list calls it, and what its label is made from." : "What the connection list calls it. No two parts on the guide share a name.");
+    if (part.symbol) {
+      html += this.text("Label", "dev-caption", d.caption ?? part.caption ?? designator(d.name), "Written by the symbol. Math goes between dollar signs: $R_1$, $U_\\mathrm{be}$. Leave empty for none; drag it on the guide to move it.", true);
+      html += this.text("Value", "dev-value", d.value ?? "", part.unit
+        ? `Written under the label. Typed short, it gets its unit: ${part.unit === "Ω" ? "4k7 is 4.7 kΩ, 220 is 220 Ω" : `100n is 100 n${esc(part.unit)}, 4u7 is 4.7 µ${esc(part.unit)}`}. Anything else is kept as typed.`
+        : "Written under the label: a type, a rating. Leave empty for none.");
+    } else {
+      html += this.text("Caption", "dev-caption", d.caption ?? part.caption ?? "", "Written under it on the guide; a new line starts a new line. Drag it on the guide to move it.", true);
+    }
     html += `<div class="btn-row"><button type="button" class="plain" data-cact="turn">Turn</button><button type="button" class="plain" data-cact="flip" aria-pressed="${!!d.flip}">Mirror</button><button type="button" class="plain" data-cact="dup">Duplicate</button></div>`;
-    if (d.cap) html += `<button type="button" class="plain" data-cact="cap-reset">Caption back under it</button>`;
+    if (d.cap) html += `<button type="button" class="plain" data-cact="cap-reset">${part.symbol ? "Label back where it goes by itself" : "Caption back under it"}</button>`;
     if (part.sketch) html += `<button type="button" class="plain" data-cact="edit-part" data-id="${esc(part.id)}">Change its drawing</button>`;
     html += this.portsList(part, d);
+    if (part.shapes) html += `<button type="button" class="plain" data-cact="save-part" data-id="${esc(part.id)}" title="A component file can be changed by hand, or given to an AI chat as a pattern for another part">Save as a component file</button>`;
     html += `<button type="button" class="danger" data-cact="delete">Delete it and its wires</button>`;
     return html;
   }
@@ -1365,7 +1476,8 @@ export class CircuitWorkspace {
     const c = this.c();
     let html = `<h2>Wire</h2>`;
     html += `<p class="cw-ends"><span>${esc(describeEnd(c, w.a))}</span><span>→</span><span>${esc(describeEnd(c, w.b))}</span></p>`;
-    html += this.swatches(w.color, pinKind(w.a.pin).bg);
+    const schematic = !!this.L?.bundles.find((b) => b.wires.some((x) => x.id === w.id))?.schematic;
+    html += this.swatches(w.color, schematic ? "#000000" : pinKind(w.a.pin).bg);
     html += this.text("Note", "wire-label", w.label ?? "", "Written along the wire and kept in the connection list. Leave empty for none.");
     html += `<div class="btn-row"><button type="button" class="plain" data-cact="select-bundle">Its bundle</button><button type="button" class="plain" data-cact="swap">Swap its ends</button></div>`;
     html += `<button type="button" class="danger" data-cact="delete">Delete this wire</button>`;
@@ -1388,9 +1500,10 @@ export class CircuitWorkspace {
 
   private textHtml(t: GuideText): string {
     let html = `<h2>Text</h2>`;
-    html += this.text("Text", "text-text", t.text, "A new line starts a new line.", true);
-    html += `<label class="field"><span>Size (mm)</span><input data-cf="text-size" type="number" min="0.5" max="40" step="0.1" value="${t.size}"></label>`;
-    html += this.choice("Weight", "text-bold", [["1", "Bold", !!t.bold], ["0", "Regular", !t.bold]]);
+    html += this.text("Text", "text-text", t.text, t.serif ? "A new line starts a new line. Math goes between dollar signs: $U_1 = 5\\,\\mathrm{V}$." : "A new line starts a new line.", true);
+    html += this.choice("Set in", "text-serif", [["0", "Sans", !t.serif], ["1", "Serif, with math", !!t.serif]]);
+    html += `<label class="field"><span>Size (mm)</span><input data-cf="text-size" type="number" min="0.5" max="40" step="0.1" value="${t.size}"><small>${shown(t.size * this.c().look.scale * 2.845)} pt on paper.</small></label>`;
+    if (!t.serif) html += this.choice("Weight", "text-bold", [["1", "Bold", !!t.bold], ["0", "Regular", !t.bold]]);
     html += this.choice("Aligned", "text-align", [["start", "Left", (t.align ?? "start") === "start"], ["middle", "Centre", t.align === "middle"], ["end", "Right", t.align === "end"]]);
     const greys = ["#16191c", "#59626a", "#9aa0a6", "#e0302b", "#2e6ec3", "#3a9c48"];
     html += `<div class="field"><span id="cw-tcol">Colour</span><div class="swatches" role="group" aria-labelledby="cw-tcol">${greys.map((g) =>
@@ -1412,6 +1525,23 @@ export class CircuitWorkspace {
       case "preview": return this.setPreview(!this.preview);
       case "fit": return this.fit();
       case "place": return this.startPlacing(ds.starter ? { starter: ds.starter } : { part: ds.id });
+      case "deselect": this.sel = null; return this.host.touch();
+      case "lib-cat": {
+        if (!ds.id) return;
+        if (this.lib.open.has(ds.id)) this.lib.open.delete(ds.id);
+        else this.lib.open.add(ds.id);
+        saveLibraryState(this.lib);
+        return this.host.touch();
+      }
+      case "lib-logic": {
+        const to = ds.v === "ansi" ? "ansi" : "iec";
+        // A gate in hand follows the change of shape.
+        if (this.placing?.starter?.startsWith(`logic/${this.lib.logic}/`)) this.placing.starter = this.placing.starter.replace(`logic/${this.lib.logic}/`, `logic/${to}/`);
+        this.lib.logic = to;
+        saveLibraryState(this.lib);
+        return this.host.touch();
+      }
+      case "comma": if (ds.v === "comma") c.look.comma = true; else delete c.look.comma; return this.changed();
       case "new-part": return this.host.editPart(null);
       case "edit-part": return ds.id ? this.host.editPart(ds.id) : undefined;
       case "import-part": this.fileKind = "part"; this.file.accept = ".json,application/json"; return this.file.click();
@@ -1429,8 +1559,8 @@ export class CircuitWorkspace {
         navigator.clipboard?.writeText(PHOTO_HOWTO).then(() => this.host.toast("Instructions copied: paste them into an AI chat with a photo of the board."), () => this.host.toast("Copying is blocked here: save them instead."));
         return;
       case "save-howto": return this.host.save(PHOTO_HOWTO, ".md", "text/markdown", "Instructions", "pcb-photo-to-component");
-      case "example": {
-        const ex = exampleCircuit((x) => { applyCsv(x, readCsv(EXAMPLE_CSV).rows); });
+      case "example": case "example-diagram": {
+        const ex = act === "example" ? exampleCircuit((x) => { applyCsv(x, readCsv(EXAMPLE_CSV).rows); }) : exampleDiagram();
         // Parts the guide has already stay, and so does anything else in it.
         const sk = this.host.sketch();
         sk.circuit = { ...ex, parts: [...c.parts.filter((p) => !ex.parts.some((q) => q.starter && q.starter === p.starter)), ...ex.parts], nextId: Math.max(ex.nextId, c.nextId) };
@@ -1447,9 +1577,9 @@ export class CircuitWorkspace {
       case "delete": return this.deleteSelected();
       case "cap-reset": for (const d of this.selectedDevices()) delete d.cap; return this.changed();
       case "reroute": {
-        if (s?.kind === "bundle") delete c.routes[s.key];
-        else if (s?.kind === "wire") { const w = c.wires.find((x) => x.id === s.id); if (w) delete c.routes[bundleKey(w)]; }
-        else c.routes = {};
+        if (s?.kind === "bundle") dropRoute(c, s.key);
+        else if (s?.kind === "wire") { const w = c.wires.find((x) => x.id === s.id); if (w) dropRoute(c, bundleKey(w)); }
+        else { c.routes = {}; delete c.axes; }
         return this.changed();
       }
       case "select-bundle": if (s?.kind === "wire") { const w = c.wires.find((x) => x.id === s.id); if (w) this.sel = { kind: "bundle", key: bundleKey(w) }; } return this.host.touch();
@@ -1463,10 +1593,11 @@ export class CircuitWorkspace {
         else delete w.color;
         return this.changed();
       }
-      case "text-bold": case "text-align": case "text-color": {
+      case "text-bold": case "text-align": case "text-color": case "text-serif": {
         const t = s?.kind === "text" ? c.texts.find((x) => x.id === s.id) : null;
         if (!t) return;
-        if (act === "text-bold") { if (ds.v === "1") t.bold = true; else delete t.bold; }
+        if (act === "text-serif") { if (ds.v === "1") t.serif = true; else delete t.serif; }
+        else if (act === "text-bold") { if (ds.v === "1") t.bold = true; else delete t.bold; }
         else if (act === "text-align") t.align = ds.v === "middle" || ds.v === "end" ? ds.v : "start";
         else t.color = ds.v;
         return this.changed();
@@ -1482,6 +1613,11 @@ export class CircuitWorkspace {
     const v = input.value;
     const num = Number(v.replace(",", "."));
     const done = () => { this.stale = true; if (live) this.host.render(); else this.changed(); };
+    if (f === "lib-search") {
+      if (this.lib.query === v) return;
+      this.lib.query = v;
+      return this.host.touch();
+    }
     if (f === "look-wire" || f === "look-scale") {
       if (!(num > 0)) return;
       const look: Look = c.look;
@@ -1501,8 +1637,14 @@ export class CircuitWorkspace {
       }
       if (f === "dev-caption") {
         const part = partOf(c, d);
-        if (v === (part?.caption ?? "")) delete d.caption;
+        // What it would be labelled anyway is not kept: a symbol left with its own label follows its name.
+        if (v === (part?.caption ?? (part?.symbol ? designator(d.name) : ""))) delete d.caption;
         else d.caption = v;
+        return done();
+      }
+      if (f === "dev-value") {
+        if (v.trim()) d.value = v.trim();
+        else delete d.value;
         return done();
       }
     }

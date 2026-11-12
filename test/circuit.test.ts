@@ -5,14 +5,17 @@ import { primsToSvg, primsToTikz } from "../src/export";
 import type { V } from "../src/geom";
 import {
   newCircuit, readCircuit, pinKind, pairPins, pairScore, bundleKey, keyedEnds, freeName, readColor, colorName, darken, removeDevice,
+  numberedName, circuitId,
   type Circuit, type PartDef,
 } from "../src/circuit/model";
-import { STARTER, starterPart, useStarter, exampleCircuit, EXAMPLE_CSV } from "../src/circuit/starter";
+import { STARTER, CATEGORIES, starterPart, useStarter, peekStarter, exampleCircuit, exampleDiagram, EXAMPLE_CSV } from "../src/circuit/starter";
+import { SYM, SYMBOLS, JUNCTION_KEY } from "../src/circuit/symbols";
+import { libraryHtml } from "../src/circuit/library";
 import { readCsv, writeCsv, applyCsv, splitCsvLine } from "../src/circuit/csv";
 import { readComponent, writeComponent } from "../src/circuit/component";
-import { pathThrough, autoRoute, laneChains, tidyPath, flatten, axisOf, placesOf } from "../src/circuit/route";
-import { layout, guidePrims, guideLayers, partPrims, tagLength, TAG, describeEnd } from "../src/circuit/figure";
-import { place, placePrims, scalePrims, connectorPins } from "../src/circuit/art";
+import { pathThrough, autoRoute, freeRoute, WAYS, laneChains, tidyPath, flatten, axisOf, placesOf } from "../src/circuit/route";
+import { layout, guidePrims, guideLayers, partPrims, tagLength, TAG, describeEnd, designator, valueText, captionOf } from "../src/circuit/figure";
+import { place, placePrims, scalePrims, plainWidths, connectorPins } from "../src/circuit/art";
 import { partFromSketch } from "../src/circuit/sketchpart";
 
 const example = (): Circuit => exampleCircuit((c) => { applyCsv(c, readCsv(EXAMPLE_CSV).rows); });
@@ -318,8 +321,8 @@ describe("parts", () => {
   it("draws every starter part, with its ports inside its box", () => {
     for (const s of STARTER) {
       const p = starterPart(s.key)!;
-      expect(partPrims(p).length).toBeGreaterThan(3);
-      expect(p.ports.length).toBeGreaterThan(0);
+      expect(partPrims(p).length).toBeGreaterThan(s.cat === "boards" ? 3 : 0);
+      if (s.cat === "boards") expect(p.ports.length).toBeGreaterThan(0);
       for (const port of p.ports) for (const q of port.pins) {
         expect(q.x).toBeGreaterThanOrEqual(-1e-9);
         expect(q.x).toBeLessThanOrEqual(p.w + 1e-9);
@@ -334,7 +337,14 @@ describe("parts", () => {
     let n = 0;
     const a = useStarter(c, "motor", () => `p${++n}`)!;
     const b = useStarter(c, "motor", () => `p${++n}`)!;
-    expect(a).toBe(b);
+    expect(b.id).toBe(a.id);
+    expect(c.parts.length).toBe(1);
+    // Once a device uses it, the copy in the guide is the one that is kept, with whatever was changed on it.
+    b.name = "My motor";
+    c.devices.push({ id: "d1", part: b.id, name: "M1", x: 0, y: 0, turn: 0 });
+    expect(useStarter(c, "motor", () => `p${++n}`)).toBe(b);
+    expect(peekStarter(c, "motor")).toBe(b);
+    expect(peekStarter(c, "esc-4in1")!.id).toBe("");
     expect(c.parts.length).toBe(1);
   });
 
@@ -352,6 +362,169 @@ describe("parts", () => {
   it("spaces connector pins along their edge", () => {
     expect(connectorPins(10, 0, "top", 3, 1)).toEqual([[9, 0], [10, 0], [11, 0]]);
     expect(connectorPins(0, 10, "left", 2, 2)).toEqual([[0, 9], [0, 11]]);
+  });
+});
+
+describe("circuit symbols", () => {
+  const diagram = (): Circuit => exampleDiagram();
+  const put = (c: Circuit, key: string, x: number, y: number, turn: 0 | 1 | 2 | 3 = 0) => {
+    const part = useStarter(c, key, () => circuitId(c, "p"))!;
+    const d = { id: circuitId(c, "d"), part: part.id, name: numberedName(c, part.ref), x, y, turn };
+    c.devices.push(d);
+    return d;
+  };
+  const join = (c: Circuit, a: [string, string], b: [string, string]) =>
+    c.wires.push({ id: circuitId(c, "w"), a: { dev: a[0], port: a[1], pin: a[1] }, b: { dev: b[0], port: b[1], pin: b[1] } });
+
+  it("sorts the library into boards, circuit symbols and logic gates", () => {
+    expect(CATEGORIES.map((k) => k.id)).toEqual(["boards", "symbols", "logic"]);
+    for (const k of CATEGORIES) expect(STARTER.some((s) => s.cat === k.id)).toBe(true);
+    expect(new Set(STARTER.map((s) => s.key)).size).toBe(STARTER.length);
+    // Every gate comes in both styles, under the same name.
+    const gates = (style: string) => SYMBOLS.filter((s) => s.style === style).map((s) => s.make().name).sort();
+    expect(gates("iec").length).toBeGreaterThanOrEqual(8);
+    expect(gates("ansi")).toEqual(gates("iec"));
+  });
+
+  it("draws each symbol with its pins whole millimetres from its middle", () => {
+    for (const s of SYMBOLS) {
+      const p = s.make();
+      expect(p.symbol, s.key).toBe(true);
+      for (const port of p.ports) {
+        expect(port.kind, s.key).toBe("pads");
+        expect(port.pins.length, s.key).toBe(1);
+        expect(port.pins[0].name, s.key).toBe(port.name);
+        const [dx, dy] = [port.pins[0].x - p.w / 2, port.pins[0].y - p.h / 2];
+        expect(Math.abs(dx - Math.round(dx)) + Math.abs(dy - Math.round(dy)), `${s.key} ${port.name}`).toBeLessThan(1e-9);
+      }
+      expect(new Set(p.ports.map((x) => x.name)).size, s.key).toBe(p.ports.length);
+    }
+  });
+
+  it("numbers the devices of a kind", () => {
+    const c = newCircuit();
+    expect([put(c, "sym/resistor", 0, 0).name, put(c, "sym/resistor", 0, 10).name, put(c, "sym/capacitor", 0, 20).name]).toEqual(["R1", "R2", "C1"]);
+    removeDevice(c, c.devices[0].id);
+    expect(numberedName(c, "R")).toBe("R1");
+    expect(numberedName(c, "LED 3")).toBe("LED1");
+  });
+
+  it("sets names and values as formulas", () => {
+    expect(designator("R1")).toBe("$R_{1}$");
+    expect(designator("LED12")).toBe("$\\mathrm{LED}_{12}$");
+    expect(designator("Motor")).toBe("Motor");
+    expect(designator("$u_a$")).toBe("$u_a$");
+    expect(valueText("10k", "Ω")).toBe("$10\\,\\mathrm{k\\Omega}$");
+    expect(valueText("4k7", "Ω")).toBe("$4.7\\,\\mathrm{k\\Omega}$");
+    expect(valueText("4k7", "Ω", true)).toBe("$4{,}7\\,\\mathrm{k\\Omega}$");
+    expect(valueText("220", "Ω")).toBe("$220\\,\\mathrm{\\Omega}$");
+    expect(valueText("100n", "F")).toBe("$100\\,\\mathrm{nF}$");
+    expect(valueText("$R_L$", "Ω")).toBe("$R_L$");
+    expect(valueText("", "Ω")).toBe("");
+    const c = diagram();
+    const r1 = c.devices.find((d) => d.name === "R1")!;
+    expect(captionOf(r1, c.parts.find((p) => p.id === r1.part)!, c.look)).toBe("$R_{1}$\n$10\\,\\mathrm{k\\Omega}$");
+  });
+
+  it("lays the example diagram out with thin square wires and a dot where three meet", () => {
+    const c = diagram();
+    const L = layout(c);
+    expect(L.problems).toEqual([]);
+    expect(L.tags).toEqual([]);
+    expect(L.bundles.length).toBe(c.wires.length);
+    for (const b of L.bundles) {
+      expect(b.schematic).toBe(true);
+      for (let i = 1; i < b.path.length; i++) expect(Math.min(Math.abs(b.path[i][0] - b.path[i - 1][0]), Math.abs(b.path[i][1] - b.path[i - 1][1]))).toBeLessThan(1e-9);
+    }
+    // The junction on the base wire draws its own dot, so none is added over it.
+    const n1 = c.devices.find((d) => d.name === "N1")!;
+    expect(L.dots.some((q) => near(q, [n1.x, n1.y]))).toBe(false);
+    const prims = guidePrims(c, L);
+    expect(prims.some((p) => p.k === "circle" && p.fill && near(p.c, [n1.x, n1.y], 1e-3))).toBe(true);
+    const layers = guideLayers(c, L);
+    const wires = [...layers.under, ...layers.over].filter((p) => p.k === "path");
+    expect(wires.length).toBe(c.wires.length);
+    for (const w of wires) if (w.k === "path") { expect(w.width).toBeCloseTo(SYM.line); expect(w.ink).toBeUndefined(); }
+    // In TikZ it is all in the styles of the mechanics figures: no widths spelt out, no colours.
+    const tikz = primsToTikz(plainWidths(scalePrims(prims, c.look.scale)), 1);
+    expect(tikz).toContain("\\draw[member]");
+    expect(tikz).toContain("$R_{1}$");
+    expect(tikz).not.toContain("definecolor");
+    expect(tikz).not.toContain("\\draw[member, line width=0.8pt");
+    expect(primsToSvg(prims, c.look.scale)).toContain("<svg");
+  });
+
+  it("puts a dot where a wire ends on another, and none where two only cross", () => {
+    const c = newCircuit();
+    const [a, b, t] = [put(c, "sym/resistor", 0, 0), put(c, "sym/resistor", 30, 0), put(c, "sym/resistor", 15, -12, 1)];
+    const names = (d: { part: string }) => c.parts.find((p) => p.id === d.part)!.ports.map((p) => p.name);
+    const [, a2] = names(a), [b1] = names(b), [t1, t2] = names(t);
+    join(c, [a.id, a2], [b.id, b1]);
+    expect(layout(c).dots).toEqual([]);
+    // A third wire onto the same pin: three ways of one net meet there.
+    const L0 = layout(c);
+    const pinOf = (d: string, port: string) => L0.devices.find((x) => x.dev.id === d)!.ports.find((x) => x.port.name === port)!.pins[0].at;
+    join(c, [t.id, pinOf(t.id, t1)[1] > pinOf(t.id, t2)[1] ? t1 : t2], [a.id, a2]);
+    const L = layout(c);
+    expect(L.problems).toEqual([]);
+    expect(L.dots.length).toBe(1);
+    // The new wire comes down onto the first and runs along it to the pin: the dot is where it lands.
+    expect(near(L.dots[0], [15, 0])).toBe(true);
+    expect(pinOf(a.id, a2)).toEqual([5, 0]);
+  });
+
+  it("lets a wire leave a junction whichever way is shortest", () => {
+    const part = starterPart(JUNCTION_KEY)!;
+    expect(part.ports.length).toBe(1);
+    expect(part.ports[0].free).toBe(true);
+    const need = { boxes: [], leadA: 0, leadB: 0, half: 0 };
+    const up = freeRoute([0, 0], WAYS, [0, 10], [[0, -1]], need);
+    expect(up.us).toEqual([0, 1]);
+    expect(pathThrough([0, 0], up.us, [0, 10], up.ue, up.places)!.length).toBe(2);
+    const side = freeRoute([0, 0], WAYS, [-10, 0], WAYS, need);
+    expect([side.us, side.ue]).toEqual([[-1, 0], [1, 0]]);
+  });
+
+  it("keeps a symbol, its values and its look in a file", () => {
+    const c = diagram();
+    c.look.comma = true;
+    const doc = emptySketch();
+    doc.circuit = c;
+    const back = deserialize(serialize(doc)).circuit!;
+    expect(back.devices.map((d) => [d.name, d.value ?? null])).toEqual(c.devices.map((d) => [d.name, d.value ?? null]));
+    expect(back.parts.every((p) => p.symbol)).toBe(true);
+    expect(back.parts.find((p) => p.starter === JUNCTION_KEY)!.ports[0].free).toBe(true);
+    expect(back.look.comma).toBe(true);
+    expect(layout(back).problems).toEqual([]);
+    expect(guidePrims(back).length).toBe(guidePrims(c).length);
+  });
+
+  it("carries a symbol through a component file", () => {
+    for (const key of ["sym/resistor", "sym/npn", JUNCTION_KEY, "logic/iec/nand"]) {
+      const part = starterPart(key)!;
+      const back = readComponent(writeComponent(part)!).part;
+      expect(back.symbol, key).toBe(true);
+      expect(back.unit, key).toBe(part.unit);
+      expect(back.ports, key).toEqual(part.ports);
+      // A file keeps thousandths of a millimetre.
+      const round = (v: unknown): unknown => JSON.parse(JSON.stringify(v, (_k, x: unknown) => (typeof x === "number" ? Math.round(x * 1000) / 1000 : x)));
+      expect(round(back.shapes), key).toEqual(round(part.shapes));
+      expect(partPrims(back).length, key).toBe(partPrims(part).length);
+    }
+  });
+
+  it("lists the library in sections, and finds parts by what they are called", () => {
+    const c = newCircuit();
+    const open = libraryHtml(c, { open: new Set(["boards", "symbols", "logic"]), query: "", logic: "iec", placing: null });
+    for (const k of CATEGORIES) expect(open).toContain(k.name);
+    expect(open).toContain('data-starter="sym/resistor"');
+    expect(open).toContain('data-starter="logic/iec/nand"');
+    expect(open).not.toContain('data-starter="logic/ansi/nand"');
+    const shut = libraryHtml(c, { open: new Set<string>(), query: "", logic: "iec", placing: null });
+    expect(shut).not.toContain('data-starter="sym/resistor"');
+    const found = libraryHtml(c, { open: new Set<string>(), query: "zener", logic: "ansi", placing: null });
+    expect(found).toContain('data-starter="sym/zener"');
+    expect(found).not.toContain('data-starter="sym/resistor"');
   });
 });
 

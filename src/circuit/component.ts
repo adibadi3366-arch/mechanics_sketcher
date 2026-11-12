@@ -15,6 +15,13 @@
 // left out) they are spaced along that edge. Pins can be placed one by one
 // instead, as {"name", "x", "y"}. "kind": "pads" makes the wires run onto the
 // pins themselves, soldered, rather than from tags beside a connector.
+//
+// With "symbol": true the part is a symbol of a circuit diagram: thin black
+// wires run right onto its pins, each pin a port of its own, and a device is
+// labelled with its name (R1) unless the file gives a caption. Its shapes are
+// drawn in "ink" (the black of the figure) with lines 0.14 mm thick, on a
+// module of 2 mm, half the size it has on paper; "unit" ("Ω", "F", "V") is
+// added to values typed short. Text shapes may be "math" (TeX) and "upright".
 
 import type { PartDef, PortDef, PinDef, Shape, Side, ConnectorStyle } from "./model";
 import { CONNECTOR_STYLES } from "./model";
@@ -27,7 +34,8 @@ const isStr = (v: unknown): v is string => typeof v === "string";
 const isObj = (v: unknown): v is Record<string, unknown> => !!v && typeof v === "object" && !Array.isArray(v);
 const SIDES: Side[] = ["top", "bottom", "left", "right"];
 const HEX = /^#[0-9a-fA-F]{6}$|^#[0-9a-fA-F]{3}$/;
-const color = (v: unknown): string | undefined => (isStr(v) && HEX.test(v.trim()) ? v.trim() : isStr(v) && /^[a-z]+$/i.test(v) && v.toLowerCase() !== "none" ? CSS_NAMES[v.toLowerCase()] : undefined);
+/** A colour of a file: a hex colour, one of a few names, or "ink" for the black a figure is drawn in. */
+const color = (v: unknown): string | undefined => (isStr(v) && HEX.test(v.trim()) ? v.trim() : isStr(v) && v.trim().toLowerCase() === "ink" ? "ink" : isStr(v) && /^[a-z]+$/i.test(v) && v.toLowerCase() !== "none" ? CSS_NAMES[v.toLowerCase()] : undefined);
 /** The few colour names a file is likely to use. */
 const CSS_NAMES: Record<string, string> = {
   black: "#000000", white: "#ffffff", red: "#e0302b", green: "#2e8b57", blue: "#2e6ec3", yellow: "#f2b400", orange: "#ee7b21",
@@ -56,7 +64,8 @@ function readShape(raw: unknown, k: number): Shape | null {
       if (!pts.length && isNum(raw.x1) && isNum(raw.y1) && isNum(raw.x2) && isNum(raw.y2)) pts = [[raw.x1, raw.y1], [raw.x2, raw.y2]];
       pts = pts.map(([x, y]) => [x * k, y * k]);
       if (pts.length < 2) return null;
-      return raw.type === "polygon" ? { type: "polygon", points: pts, ...paint } : { type: "line", points: pts, ...paint };
+      const dash = Array.isArray(raw.dash) && raw.dash.length && raw.dash.every((d) => isNum(d) && d > 0) ? { dash: (raw.dash as number[]).map((d) => d * k) } : {};
+      return raw.type === "polygon" ? { type: "polygon", points: pts, ...paint } : { type: "line", points: pts, ...paint, ...dash };
     }
     case "arc": {
       const x = n(raw.x ?? raw.cx), y = n(raw.y ?? raw.cy), r = n(raw.r);
@@ -70,6 +79,7 @@ function readShape(raw: unknown, k: number): Shape | null {
       return {
         type: "text", x, y, text: raw.text, ...(n(raw.size) ? { size: n(raw.size) } : {}), ...(color(raw.color ?? raw.fill) ? { color: color(raw.color ?? raw.fill) } : {}),
         ...(raw.bold === false ? { bold: false } : {}), ...(align ? { align } : {}), ...(isNum(raw.rotate) ? { rotate: raw.rotate } : {}),
+        ...(raw.math === true ? { math: true } : {}), ...(raw.upright === true ? { upright: true } : {}),
       };
     }
     case "connector": {
@@ -135,7 +145,11 @@ function readPort(raw: unknown, k: number, shapes: Shape[], problems: string[]):
     if (names.has(p.name)) problems.push(`Port ${raw.name} has two pins called ${p.name}: wires can reach only the first.`);
     names.add(p.name);
   }
-  return { name: raw.name.trim() || "Port", side, kind: raw.kind === "pads" ? "pads" : "plug", pins, ...(isNum(raw.wire) && raw.wire > 0 ? { wire: raw.wire * k } : {}) };
+  return {
+    name: raw.name.trim() || "Port", side, kind: raw.kind === "pads" ? "pads" : "plug", pins,
+    ...(isNum(raw.wire) && raw.wire > 0 ? { wire: raw.wire * k } : {}),
+    ...(raw.free === true ? { free: true as const } : {}),
+  };
 }
 
 /** A component file read into a part. Throws, with what is wrong, when it cannot be read. */
@@ -192,9 +206,14 @@ export function readComponent(text: string): { part: PartDef; problems: string[]
   if (!shapes.length) shapes.push({ type: "rect", x: 0, y: 0, w, h, r: Math.min(w, h) * 0.06, fill: "#ffffff", stroke: "#16191c", width: 0.3 });
   if (!ports.length) problems.push("The component has no ports: nothing can be wired to it.");
   const name = isStr(raw.name) && raw.name.trim() ? raw.name.trim() : "Component";
+  // A circuit symbol: every pin takes its wire right on it, and a caption left out is made of each device's name.
+  const symbol = raw.symbol === true;
+  if (symbol) for (const p of ports) p.kind = "pads";
   const part: PartDef = {
     id: "", name, ref: isStr(raw.ref) && raw.ref.trim() ? raw.ref.trim() : name, w, h, shapes, ports,
-    ...(isStr(raw.caption) ? { caption: raw.caption } : { caption: name }),
+    ...(isStr(raw.caption) ? { caption: raw.caption } : symbol ? {} : { caption: name }),
+    ...(symbol ? { symbol: true as const } : {}),
+    ...(symbol && isStr(raw.unit) && raw.unit.trim() ? { unit: raw.unit.trim() } : {}),
   };
   return { part, problems };
 }
@@ -217,8 +236,11 @@ export function writeComponent(part: PartDef): string | null {
   if (!part.shapes) return null;
   const round = (v: unknown): unknown => (typeof v === "number" ? Math.round(v * 1000) / 1000 : Array.isArray(v) ? v.map(round) : isObj(v) ? Object.fromEntries(Object.entries(v).map(([k, x]) => [k, round(x)])) : v);
   const one = (v: unknown) => JSON.stringify(round(v)).replace(/,"/g, ', "').replace(/":/g, '": ');
-  const head = { format: COMPONENT_FORMAT, version: 1, name: part.name, ref: part.ref, ...(part.caption !== undefined ? { caption: part.caption } : {}), units: "mm", size: [part.w, part.h] };
-  const ports = part.ports.map((p) => ({ name: p.name, side: p.side, ...(p.kind === "pads" ? { kind: "pads" } : {}), ...(p.wire ? { wire: p.wire } : {}), pins: p.pins }));
+  const head = {
+    format: COMPONENT_FORMAT, version: 1, name: part.name, ref: part.ref, ...(part.caption !== undefined ? { caption: part.caption } : {}),
+    ...(part.symbol ? { symbol: true } : {}), ...(part.unit ? { unit: part.unit } : {}), units: "mm", size: [part.w, part.h],
+  };
+  const ports = part.ports.map((p) => ({ name: p.name, side: p.side, ...(p.kind === "pads" ? { kind: "pads" } : {}), ...(p.wire ? { wire: p.wire } : {}), ...(p.free ? { free: true } : {}), pins: p.pins }));
   return "{\n" + Object.entries(head).map(([k, v]) => `  ${JSON.stringify(k)}: ${one(v)},`).join("\n") +
     `\n  "shapes": [\n    ${part.shapes.map(one).join(",\n    ")}\n  ],\n  "ports": [\n    ${ports.map(one).join(",\n    ")}\n  ]\n}\n`;
 }

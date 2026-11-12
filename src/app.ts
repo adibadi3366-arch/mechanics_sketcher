@@ -471,7 +471,7 @@ export class App {
    * for a new one), its name, and the guide's drawing and undo history, put
    * aside until the part is done.
    */
-  private partEdit: { id: string | null; name: string; doc: Sketch; history: History } | null = null;
+  private partEdit: { id: string | null; name: string; symbol: boolean; doc: Sketch; history: History } | null = null;
   /** The connector the last pin was put on, for the next one. */
   private pinPort = "J1";
 
@@ -896,7 +896,7 @@ export class App {
     if (id && !part?.sketch) return this.toast("That part was not drawn here, so there is no drawing to change.");
     let name = part?.name ?? "New part";
     if (!part) for (let k = 2; c.parts.some((p) => p.name === name); k++) name = `New part ${k}`;
-    this.partEdit = { id, name, doc, history: this.history };
+    this.partEdit = { id, name, symbol: !!part?.symbol, doc, history: this.history };
     this.history = new History();
     const sk = part?.sketch ? structuredClone(part.sketch) : emptySketch();
     delete sk.circuit;
@@ -918,7 +918,13 @@ export class App {
     const sk = this.whole();
     delete sk.circuit;
     const old = pe.id ? c.parts.find((p) => p.id === pe.id) : undefined;
-    const base = old ? { ...old, name: pe.name } : { id: circuitId(c, "p"), name: pe.name, ref: pe.name.replace(/[,\s]+/g, " ").trim() || "Part" };
+    const base: Parameters<typeof partFromSketch>[1] = old ? { ...old, name: pe.name } : { id: circuitId(c, "p"), name: pe.name, ref: pe.name.replace(/[,\s]+/g, " ").trim() || "Part" };
+    // A circuit symbol or a picture of a part: as the banner has it now.
+    if (pe.symbol) {
+      base.symbol = true;
+      // A caption that only repeats the part's name gives way to the label a symbol makes of each device's name.
+      if (base.caption === base.name || base.caption === old?.name) delete base.caption;
+    } else delete base.symbol;
     const got = partFromSketch(sk, base);
     return { ...got, isNew: !old };
   }
@@ -4521,7 +4527,18 @@ export class App {
       (CIRCUIT_PAGE && !this.partEdit ? `<a class="tab apart tab-link" href="../app/" title="The sketcher for mechanics figures">Sketcher</a>` : "");
     const bar = $("#part-banner");
     bar.hidden = !this.partEdit;
-    if (this.partEdit) $<HTMLInputElement>("#part-name").value = this.partEdit.name;
+    if (this.partEdit) {
+      $<HTMLInputElement>("#part-name").value = this.partEdit.name;
+      $<HTMLInputElement>("#part-symbol").checked = this.partEdit.symbol;
+      this.partBannerNote();
+    }
+  }
+
+  /** What the banner says while a part is drawn: a symbol is drawn at its size on paper, a part at its real size. */
+  private partBannerNote(): void {
+    $("#part-banner-note").textContent = this.partEdit?.symbol
+      ? "Draw it at the size it has on paper: a resistor is 12 mm long. Put a pin where each wire ends, with the Wire pin tool on the Annotate tab."
+      : "Draw it, dimension it in mm, and put pins on it with the Wire pin tool on the Annotate tab.";
   }
 
   private buildToolbars(): void {
@@ -5256,6 +5273,12 @@ export class App {
     });
     $<HTMLInputElement>("#part-name").addEventListener("keydown", (e) => {
       if (e.key === "Enter") (e.target as HTMLInputElement).blur();
+    });
+    $<HTMLInputElement>("#part-symbol").addEventListener("change", (e) => {
+      if (!this.partEdit) return;
+      this.partEdit.symbol = (e.target as HTMLInputElement).checked;
+      this.partBannerNote();
+      this.autosave();
     });
     document.addEventListener("click", (e) => {
       const btn = (e.target as Element).closest<HTMLElement>("button");

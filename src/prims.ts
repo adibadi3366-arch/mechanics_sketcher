@@ -128,7 +128,7 @@ interface Base {
 export interface LinePrim extends Base { k: "line"; a: V; b: V; stroke: StrokeStyle; width?: number; dash?: number[]; arrowA?: boolean; arrowB?: boolean; head?: number }
 export interface CirclePrim extends Base { k: "circle"; c: V; r: number; stroke: StrokeStyle; width?: number; dash?: number[]; fill?: Fill }
 /** A closed outline. */
-export interface PolyPrim extends Base { k: "poly"; pts: V[]; stroke: StrokeStyle; fill?: Fill; dash?: undefined }
+export interface PolyPrim extends Base { k: "poly"; pts: V[]; stroke: StrokeStyle; width?: number; fill?: Fill; dash?: undefined }
 /** An open run of straight pieces: a plotted curve. `dash` is its pattern, as on and off lengths in mm. */
 export interface PathPrim extends Base { k: "path"; pts: V[]; stroke: StrokeStyle; width?: number; dash?: number[] }
 /** A picture, in the editor only: its bottom left corner and size, at `opacity`. */
